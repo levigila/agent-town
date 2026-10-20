@@ -1,7 +1,7 @@
 // Cenario: piso, parede, mesas, mesa de reuniao e props.
 // Tudo desenhado em retangulos, no espaco logico 480x304.
 
-import { WORLD, WALL_H, DESK, MEETING } from './config.js';
+import { WORLD, WALL_H, DESK, MEETING, floorTheme } from './config.js';
 
 const R = (ctx, x, y, w, h, c) => {
   ctx.fillStyle = c;
@@ -28,17 +28,22 @@ const COL = {
   rug2: '#463c5e',
 };
 
+/**
+ * Piso em xadrez. As cores vem do tema escolhido no painel
+ * (config.floorTheme: escuro/claro/azul), com o escuro como padrao.
+ */
 export function drawFloor(ctx) {
+  const theme = floorTheme();
   const T = 16;
   for (let y = WALL_H; y < WORLD.h; y += T) {
     for (let x = 0; x < WORLD.w; x += T) {
       const alt = ((x / T) | 0) % 2 === ((y / T) | 0) % 2;
-      R(ctx, x, y, T, T, alt ? COL.floorA : COL.floorB);
+      R(ctx, x, y, T, T, alt ? theme.floorA : theme.floorB);
     }
   }
   // juntas mais marcadas
-  for (let x = 0; x <= WORLD.w; x += 64) R(ctx, x, WALL_H, 1, WORLD.h - WALL_H, COL.floorSeam);
-  for (let y = WALL_H; y <= WORLD.h; y += 64) R(ctx, 0, y, WORLD.w, 1, COL.floorSeam);
+  for (let x = 0; x <= WORLD.w; x += 64) R(ctx, x, WALL_H, 1, WORLD.h - WALL_H, theme.seam);
+  for (let y = WALL_H; y <= WORLD.h; y += 64) R(ctx, 0, y, WORLD.w, 1, theme.seam);
 }
 
 export function drawWall(ctx, now) {
