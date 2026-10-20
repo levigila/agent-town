@@ -14,6 +14,30 @@ const TYPE_FREQ = 110;
 // Amplitude do offset vertical dos bracos ao digitar (pixels)
 const TYPE_AMP = 1.5;
 
+// Sombra no chao: elipse escura semitransparente, achatada na vertical.
+const SHADOW_RX = 7.5;
+const SHADOW_RY = 2.6;
+const SHADOW_ALPHA = 0.3;
+
+/**
+ * Desenha a sombra no chao sob o agente.
+ * Deve ser chamada ANTES do corpo do sprite (a cada frame), pois usa
+ * agent.pos.x / agent.pos.y (pe do agente no chao).
+ * @param ctx canvas 2d no espaco do mundo (480x304)
+ * @param agent instancia de AgentView (pos.x, pos.y)
+ */
+export function drawShadow(ctx, agent) {
+  const fx = Math.round(agent.pos.x);
+  const fy = Math.round(agent.pos.y);
+
+  ctx.save();
+  ctx.fillStyle = `rgba(0,0,0,${SHADOW_ALPHA})`;
+  ctx.beginPath();
+  ctx.ellipse(fx, fy, SHADOW_RX, SHADOW_RY, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 /**
  * Offset vertical dos bracos para o estado atual.
  * Retorna { left, right } em pixels (arredondados), com fases opostas
@@ -59,11 +83,8 @@ export function drawAgent(ctx, agent, now) {
   const bob = walking ? Math.abs(Math.sin(phase)) * 1.2 : working ? Math.sin(now / 190) * 0.7 : 0;
   const y = Math.round(fy - bob);
 
-  // sombra
-  ctx.fillStyle = 'rgba(0,0,0,0.34)';
-  ctx.beginPath();
-  ctx.ellipse(fx, fy, 7, 2.4, 0, 0, Math.PI * 2);
-  ctx.fill();
+  // sombra no chao (antes do corpo)
+  drawShadow(ctx, agent);
 
   // pernas
   const l1 = Math.round(swing * 1.8);
