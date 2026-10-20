@@ -31,20 +31,28 @@ Responda APENAS com JSON valido, sem markdown, sem explicacao, neste formato:
 }
 
 Regras:
-1. Entre 2 e 6 tarefas. Menos e melhor.
+1. Entre 2 e 5 tarefas. Menos e melhor — cada tarefa custa tokens.
 2. "depends_on" lista os ids que precisam terminar antes.
 3. Nao crie dependencia circular.
 4. Coloque "researcher" primeiro quando o coder precisar entender o projeto.
 5. Sempre termine com uma tarefa do "reviewer" que dependa das do coder.
 6. Instrucoes concretas: diga o que fazer, nao o que "considerar".
-7. Nao invente arquivos que nao existem sem mandar o agente procurar antes.`;
+7. Nao invente arquivos que nao existem sem mandar o agente procurar antes.
+8. IMPORTANTE: no maximo DUAS tarefas de "coder" no plano inteiro, e nunca
+   duas de "coder" na mesma onda. Tarefas paralelas do mesmo agente releem os
+   mesmos arquivos e desperdicam o orcamento.
+9. Prefira uma tarefa de coder que faca tudo, a varias que facam pedacos.
+10. A instrucao de cada tarefa deve citar no maximo 3 arquivos concretos.
+
+Comece a resposta com { e termine com }. Nada antes, nada depois.`;
 
 function buildRepairPrompt(problems) {
   return `Sua resposta anterior foi rejeitada pelos seguintes motivos:
 
 ${problems.map((p) => `- ${p}`).join('\n')}
 
-Responda novamente APENAS com o JSON corrigido, seguindo o formato pedido.`;
+Responda novamente APENAS com o JSON corrigido, seguindo o formato pedido.
+Comece com { e termine com }. Sem markdown, sem texto em volta.`;
 }
 
 /**

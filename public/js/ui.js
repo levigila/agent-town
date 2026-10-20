@@ -456,13 +456,14 @@ export class UI {
         li.classList.add('is-run');
         who.textContent = 'RUN';
         if (ev.reason === 'completed') {
-          msg.textContent = 'concluido com sucesso';
+          const extra = ev.unverified?.length ? ` · ${ev.unverified.length} sem teste` : '';
+          msg.textContent = `concluido${extra}`;
         } else if (ev.reason === 'parcial') {
           msg.textContent = `concluido parcialmente${ev.failed?.length ? ` (falhou: ${ev.failed.join(', ')})` : ''}`;
         } else if (ev.reason === 'setup_failed') {
           msg.textContent = `falha na preparacao · ${ev.error || ''}`;
         } else if (ev.reason === 'budget') {
-          msg.textContent = `parado por orcamento · ${ev.error || ''}`;
+          msg.textContent = `parado por orcamento · ${ev.error || ''}${ev.hint ? ` · ${ev.hint}` : ''}`;
         } else {
           msg.textContent = `encerrado (${ev.reason || 'parado'})`;
         }

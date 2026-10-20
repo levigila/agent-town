@@ -171,23 +171,35 @@ export function createTools(root, tmpDir, options = {}) {
   const testTimeoutMs = Number(options.testTimeoutMs) > 0 ? Number(options.testTimeoutMs) : 180000;
   const extraIgnore = Array.isArray(options.ignore) ? options.ignore : [];
 
+  // Arquivos já lidos, POR CONVERSA. Releitura devolve um aviso curto em vez
+  // do conteúdo inteiro: o modelo esquece o que leu e relê, e cada releitura
+  // custa o arquivo inteiro em tokens de novo.
+  //
+  // A chave inclui o escopo (um por agente/tarefa). Sem isso, o agente B
+  // receberia "já lido" de um arquivo que só o agente A viu — e ficaria cego.
+  const reads = new Set();
+
   return {
     root,
 
     /**
      * Executa uma ferramenta. NUNCA lança: sempre devolve
      * { ok, summary, output } — inclusive para caminho inválido.
+     *
+     * @param {string} name
+     * @param {object} args
+     * @param {string} [scope] identifica a conversa (para o cache de leitura)
      */
-    async execute(name, args = {}) {
+    async execute(name, args = {}, scope = 'default') {
       try {
-        return await runTool(name, args);
+        return await runTool(name, args, scope);
       } catch (err) {
         return { ok: false, summary: err.message || 'falha na ferramenta', output: '' };
       }
     },
   };
 
-  async function runTool(name, args) {
+  async function runTool(name, args, scope) {
     switch (name) {
       case 'list_files': {
         const files = await walk(root, root, [], { ignore: extraIgnore });
@@ -196,10 +208,22 @@ export function createTools(root, tmpDir, options = {}) {
 
       case 'read_file': {
         const full = safeResolve(root, args.path);
+        const rel = path.relative(root, full).split(path.sep).join('/');
+        const key = `${scope}|${rel}`;
+
+        if (reads.has(key)) {
+          return {
+            ok: true,
+            summary: 'ja lido nesta tarefa',
+            output: `[ja lido] O conteudo de ${rel} esta na conversa acima. Use-o; nao precisa reler.`,
+          };
+        }
+
         const info = await stat(full).catch(() => null);
         if (!info?.isFile()) return { ok: false, summary: 'arquivo nao encontrado', output: '' };
         if (info.size > MAX_FILE_BYTES) return { ok: false, summary: 'arquivo grande demais', output: '' };
         const text = await readFile(full, 'utf8');
+        reads.add(key);
         return { ok: true, summary: `${text.split('\n').length} linhas`, output: text };
       }
 
@@ -228,14 +252,33 @@ export function createTools(root, tmpDir, options = {}) {
   }
 
   async function runTests() {
-    // Comando configurado no projeto tem prioridade (Flutter, Maven, pytest...).
+    // 1. Comando configurado no projeto tem prioridade (Flutter, Maven, pytest...).
     if (Array.isArray(testCommand) && testCommand.length) {
       return runCustomTests(testCommand);
     }
 
+    // 2. Pasta test/ com testes do Node.
     const testDir = path.join(root, 'test');
-    if (!existsSync(testDir)) return { ok: false, summary: 'sem pasta test/', output: '' };
+    if (existsSync(testDir)) {
+      const nodeTests = await runNodeTests(testDir);
+      if (nodeTests) return nodeTests;
+    }
 
+    // 3. Script "test" do package.json — cobre projetos que usam npm test.
+    const fromPackage = await runPackageScript();
+    if (fromPackage) return fromPackage;
+
+    return {
+      ok: false,
+      summary: 'projeto sem testes executaveis',
+      output:
+        'Nao ha pasta test/, nem script "test" no package.json, nem testCommand em .agent-town.json. ' +
+        'Voce NAO pode validar por testes: revise o codigo manualmente antes de concluir.',
+    };
+  }
+
+  /** Roda os *.test.* da pasta test/ com o runner do Node. */
+  async function runNodeTests(testDir) {
     // Passa os arquivos explicitamente: `node --test test/` nao funciona
     // igual em todas as versoes/plataformas.
     const entries = await readdir(testDir, { withFileTypes: true });
@@ -244,7 +287,7 @@ export function createTools(root, tmpDir, options = {}) {
       .map((e) => `test/${e.name}`)
       .sort();
 
-    if (!files.length) return { ok: false, summary: 'nenhum arquivo de teste', output: '' };
+    if (!files.length) return null;
 
     const logPath = path.join(tmpDir, `test-${Date.now()}.log`);
     const result = await runProcess({
@@ -299,6 +342,50 @@ export function createTools(root, tmpDir, options = {}) {
     return {
       ok: passed,
       summary: passed ? `"${label}" passou` : `"${label}" falhou (codigo ${result.code})`,
+      output: tail || '(sem saida)',
+    };
+  }
+
+  /**
+   * Usa o script "test" do package.json.
+   * Sem isso, um projeto como o agent-town (que testa via npm test) ficaria
+   * sem nenhuma forma de validação — e o agente não teria como saber se acertou.
+   */
+  async function runPackageScript() {
+    const pkgPath = path.join(root, 'package.json');
+    if (!existsSync(pkgPath)) return null;
+
+    let script;
+    try {
+      const pkg = JSON.parse(await readFile(pkgPath, 'utf8'));
+      script = pkg?.scripts?.test;
+    } catch {
+      return null;
+    }
+
+    if (!script || typeof script !== 'string') return null;
+
+    const logPath = path.join(tmpDir, `test-${Date.now()}.log`);
+
+    // Node 20+ recusa spawn() direto de .cmd/.bat (CVE-2024-27980), então
+    // passamos pelo shell do sistema em vez de chamar "npm.cmd".
+    const isWin = process.platform === 'win32';
+    const result = await runProcess({
+      command: isWin ? 'cmd.exe' : 'sh',
+      args: isWin ? ['/d', '/s', '/c', 'npm test --silent'] : ['-c', 'npm test --silent'],
+      cwd: root,
+      timeoutMs: testTimeoutMs,
+      logPath,
+    });
+
+    rmSync(logPath, { force: true });
+
+    const passed = result.code === 0;
+    const tail = result.output.split('\n').filter(Boolean).slice(-30).join('\n');
+
+    return {
+      ok: passed,
+      summary: passed ? 'npm test passou' : `npm test falhou (codigo ${result.code})`,
       output: tail || '(sem saida)',
     };
   }

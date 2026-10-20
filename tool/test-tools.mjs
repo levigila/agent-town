@@ -103,6 +103,75 @@ expect(!fail.ok, 'run_tests deveria falhar com teste vermelho');
 const leftovers = (await tools.execute('list_files', {})).output.split('\n').filter((f) => f.includes('.log'));
 expect(leftovers.length === 0, `vazou arquivo de log no workspace: ${leftovers.join(', ')}`);
 
+// --- releitura nao devolve o conteudo de novo ------------------------------
+{
+  // arquivo novo e grande: os anteriores já estão no cache de leitura
+  const bigContent = `CONTEUDO-UNICO-XYZ\n${'linha de enchimento para simular um arquivo real\n'.repeat(40)}`;
+  await tools.execute('write_file', { path: 'src/dedupe.txt', content: bigContent });
+
+  const first = await tools.execute('read_file', { path: 'src/dedupe.txt' });
+  expect(first.ok && first.output.includes('CONTEUDO-UNICO-XYZ'), 'primeira leitura deveria trazer o conteudo');
+
+  const second = await tools.execute('read_file', { path: 'src/dedupe.txt' });
+  expect(second.ok, 'segunda leitura deveria continuar ok');
+  expect(second.output.length < first.output.length, 'releitura deveria ser mais curta que a original');
+  expect(second.summary.includes('ja lido'), `summary deveria indicar releitura: ${second.summary}`);
+  expect(!second.output.includes('CONTEUDO-UNICO-XYZ'), 'releitura NAO deveria repetir o conteudo');
+
+  // outro escopo (outro agente) precisa receber o conteudo de novo
+  const otherAgent = await tools.execute('read_file', { path: 'src/dedupe.txt' }, 'coder:2');
+  expect(
+    otherAgent.output.includes('CONTEUDO-UNICO-XYZ'),
+    'outro agente DEVE receber o conteudo (cache e por conversa, nao global)',
+  );
+}
+
+// --- sem test/ nem script, run_tests explica em vez de so falhar -----------
+{
+  const bare = path.join(dir, 'bare');
+  await mkdir(bare, { recursive: true });
+  const bareTools = createTools(bare, tmp);
+
+  const r = await bareTools.execute('run_tests', {});
+  expect(!r.ok, 'projeto sem testes deveria retornar ok=false');
+  expect(String(r.summary).includes('sem testes'), `summary deveria dizer que nao ha testes: ${r.summary}`);
+  expect(
+    String(r.output).includes('NAO pode validar'),
+    'a saida deveria avisar que nao da para validar por testes',
+  );
+}
+
+// --- script "test" do package.json e usado como fallback -------------------
+{
+  const withPkg = path.join(dir, 'with-pkg');
+  await mkdir(withPkg, { recursive: true });
+  await writeFile(
+    path.join(withPkg, 'package.json'),
+    JSON.stringify({ name: 'p', scripts: { test: 'node -e "process.exit(0)"' } }),
+    'utf8',
+  );
+
+  const pkgTools = createTools(withPkg, tmp);
+  const r = await pkgTools.execute('run_tests', {});
+  expect(r.ok, `npm test deveria ser usado como fallback: ${r.summary}`);
+  expect(String(r.summary).includes('npm test'), `summary deveria citar npm test: ${r.summary}`);
+}
+
+// --- package.json com script que falha -------------------------------------
+{
+  const failing = path.join(dir, 'pkg-fail');
+  await mkdir(failing, { recursive: true });
+  await writeFile(
+    path.join(failing, 'package.json'),
+    JSON.stringify({ name: 'p', scripts: { test: 'node -e "process.exit(1)"' } }),
+    'utf8',
+  );
+
+  const failTools = createTools(failing, tmp);
+  const r = await failTools.execute('run_tests', {});
+  expect(!r.ok, 'npm test com falha deveria retornar ok=false');
+}
+
 await rm(dir, { recursive: true, force: true });
 
 if (problems.length) {
@@ -110,5 +179,5 @@ if (problems.length) {
   for (const p of problems) console.error(' - ' + p);
   process.exitCode = 1;
 } else {
-  console.log('OK — ferramentas seguras e funcionais (sandbox, leitura, escrita, testes)');
+  console.log('OK — ferramentas: sandbox, releitura, runner e fallback de testes');
 }

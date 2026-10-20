@@ -1,19 +1,19 @@
 // Orquestrador real: chama as APIs e emite os mesmos eventos que o simulador.
 //
-// Arquitetura em três camadas:
+// Arquitetura em trÃªs camadas:
 //
-//   1. PLANEJAMENTO — o Planner recebe o objetivo e devolve um grafo de tarefas
+//   1. PLANEJAMENTO â€” o Planner recebe o objetivo e devolve um grafo de tarefas
 //      (JSON validado em src/graph.mjs). Se falhar duas vezes, cai no pipeline
 //      fixo. A ferramenta nunca quebra por causa do Planner.
 //
-//   2. EXECUÇÃO — o grafo é ordenado em ondas (src/graph.mjs). Cada onda roda
-//      em paralelo; o semáforo do provedor respeita o limite de concorrência.
+//   2. EXECUÃ‡ÃƒO â€” o grafo Ã© ordenado em ondas (src/graph.mjs). Cada onda roda
+//      em paralelo; o semÃ¡foro do provedor respeita o limite de concorrÃªncia.
 //      O resultado de uma tarefa alimenta as tarefas que dependem dela.
 //
-//   3. ISOLAMENTO — em modo projeto, tudo acontece numa branch git própria
-//      (src/git.mjs). Nunca push. Diff sempre disponível para revisão.
+//   3. ISOLAMENTO â€” em modo projeto, tudo acontece numa branch git prÃ³pria
+//      (src/git.mjs). Nunca push. Diff sempre disponÃ­vel para revisÃ£o.
 //
-// O frontend não muda entre modo simulado e real.
+// O frontend nÃ£o muda entre modo simulado e real.
 
 import { createProvidersForRoles } from './providers/index.mjs';
 import { createTools, TOOL_DEFS } from './tools.mjs';
@@ -55,9 +55,12 @@ Responda em portugues, em no maximo 10 linhas, direto ao ponto.`,
   coder: `Voce e o Coder do time.
 Implemente exatamente o que a instrucao pede, usando as ferramentas.
 Regras:
-- Leia o arquivo antes de reescrever.
+- Leia apenas os arquivos que vai ALTERAR (no maximo 3). Nao releia: o que
+  ja apareceu na conversa continua valendo.
 - Envie o conteudo COMPLETO do arquivo em write_file (nunca diff ou trecho).
-- Rode run_tests antes de dizer que terminou.
+- Escreva o codigo ANTES de gastar passos explorando.
+- Rode run_tests antes de dizer que terminou. Se nao houver testes no projeto,
+  diga isso claramente em vez de afirmar que passou.
 - Se os testes falharem, corrija e rode de novo. Nao pare com teste vermelho.
 Responda em portugues, curto, dizendo o que mudou.`,
 
@@ -91,6 +94,7 @@ export class Orchestrator {
     this.error = null;
     this.plan = null;
     this.project = null;
+    this._scopeSeq = 0;
   }
 
   getState() {
@@ -123,7 +127,7 @@ export class Orchestrator {
 
   /**
    * @param {object} options
-   * @param {string} [options.task] objetivo escrito pelo usuário
+   * @param {string} [options.task] objetivo escrito pelo usuÃ¡rio
    * @param {'template'|'project'} [options.mode]
    * @param {string} [options.projectPath]
    * @param {string} [options.template]
@@ -162,7 +166,7 @@ export class Orchestrator {
     return this.getState();
   }
 
-  // -- emissão ---------------------------------------------------------------
+  // -- emissÃ£o ---------------------------------------------------------------
 
   _emit(type, agentId = null, payload = {}) {
     this.emitRaw({ id: nextId(), ts: Date.now(), type, agentId, runId: this.runId, ...payload });
@@ -203,7 +207,7 @@ export class Orchestrator {
     if (!this.running || this.controller?.signal.aborted) throw new Aborted('execucao interrompida');
   }
 
-  // -- execução --------------------------------------------------------------
+  // -- execuÃ§Ã£o --------------------------------------------------------------
 
   async _run() {
     const { byRole, limiters } = this.providerFactory(this.config);
@@ -219,7 +223,7 @@ export class Orchestrator {
     });
     for (const id of AGENT_IDS) this._emit('agent_spawned', id, { cycle: 1 });
 
-    // --- preparação do ambiente ---------------------------------------------
+    // --- preparaÃ§Ã£o do ambiente ---------------------------------------------
     const env = mode === 'project' ? await this._prepareProject(runId) : await this._prepareTemplate(runId);
 
     if (!env.ok) {
@@ -236,7 +240,16 @@ export class Orchestrator {
       await this._execute(byRole, env);
     } catch (err) {
       if (err instanceof BudgetExceeded) {
-        this._emit('run_finished', null, { reason: 'budget', error: err.message, total: { ...this.totals } });
+        const hint =
+          'Os agentes gastaram o teto antes de concluir. Aumente MAX_TOKENS, ' +
+          'reduza MAX_TASKS, ou quebre a tarefa em pedacos menores.';
+        this._emit('agent_error', null, { text: `${err.message}. ${hint}` });
+        this._emit('run_finished', null, {
+          reason: 'budget',
+          error: err.message,
+          hint,
+          total: { ...this.totals },
+        });
       } else if (err instanceof Aborted) {
         this._emit('run_finished', null, { reason: 'stopped', total: { ...this.totals } });
       } else {
@@ -249,7 +262,7 @@ export class Orchestrator {
     }
   }
 
-  // -- preparação: template --------------------------------------------------
+  // -- preparaÃ§Ã£o: template --------------------------------------------------
 
   async _prepareTemplate(runId) {
     const { workspace, tmpDir } = await seedWorkspace(runId, this.request.template);
@@ -274,7 +287,7 @@ export class Orchestrator {
     };
   }
 
-  // -- preparação: projeto real ---------------------------------------------
+  // -- preparaÃ§Ã£o: projeto real ---------------------------------------------
 
   async _prepareProject(runId) {
     const allowed = this.config.projectRoots || [];
@@ -313,7 +326,7 @@ export class Orchestrator {
 
     this._emit('agent_message', 'planner', {
       to: 'researcher',
-      text: `Projeto: ${path.basename(resolved.path)} · branch ${branchInfo.branch}`,
+      text: `Projeto: ${path.basename(resolved.path)} Â· branch ${branchInfo.branch}`,
     });
 
     const context = [
@@ -339,7 +352,7 @@ export class Orchestrator {
     };
   }
 
-  // -- execução do plano -----------------------------------------------------
+  // -- execuÃ§Ã£o do plano -----------------------------------------------------
 
   async _execute(byRole, env) {
     // --- 1. planejamento ----------------------------------------------------
@@ -391,25 +404,35 @@ export class Orchestrator {
       summary: fellBack ? 'fallback: pipeline padrao' : `${tasks.length} tarefas planejadas`,
     });
 
-    // --- 2. execução em ondas ----------------------------------------------
+    // --- 2. execuÃ§Ã£o em ondas ----------------------------------------------
     const results = {};
     let reviewerVerdict = null;
 
     for (let w = 0; w < waves.length; w++) {
       this._checkAbort();
       const wave = waves[w];
+      const self = this;
 
       this._emit('run_started', null, { label: `Onda ${w + 1}/${waves.length}`, cycle: w + 1, silent: true });
 
-      await Promise.all(
-        wave.map(async (task) => {
-          this._checkAbort();
+      // Duas tarefas do MESMO agente na mesma onda releem os mesmos arquivos e
+      // desperdicam o orÃ§amento. Serializamos por agente, mantendo o
+      // paralelismo apenas entre agentes diferentes.
+      const byAgent = new Map();
+      for (const task of wave) {
+        if (!byAgent.has(task.agent)) byAgent.set(task.agent, []);
+        byAgent.get(task.agent).push(task);
+      }
 
-          // dependência que falhou bloqueia a tarefa
+      const runOne = async (task) => {
+        {
+          self._checkAbort();
+
+          // dependÃªncia que falhou bloqueia a tarefa
           const blocked = task.dependsOn.filter((d) => results[d] && results[d].ok === false);
           if (blocked.length) {
             results[task.id] = { ok: false, blocked: true, text: 'bloqueada por dependencia' };
-            this._emit('agent_error', task.agent, {
+            self._emit('agent_error', task.agent, {
               text: `tarefa ${task.id} bloqueada por: ${blocked.join(', ')}`,
             });
             return;
@@ -418,11 +441,11 @@ export class Orchestrator {
           const provider = byRole[task.agent];
           if (!provider) {
             results[task.id] = { ok: false, text: `sem provedor para ${task.agent}` };
-            this._emit('agent_error', task.agent, { text: `sem provedor para ${task.agent}` });
+            self._emit('agent_error', task.agent, { text: `sem provedor para ${task.agent}` });
             return;
           }
 
-          this._handoff('planner', task.agent, task.instruction, task.id);
+          self._handoff('planner', task.agent, task.instruction, task.id);
 
           const context = task.dependsOn
             .map((d) => (results[d] ? `[${d}]\n${results[d].text}` : ''))
@@ -442,29 +465,40 @@ export class Orchestrator {
           const toolNames = task.agent === 'researcher' ? READ_ONLY : ALL_TOOLS;
 
           try {
-            const out = await this._agent({
+            const out = await self._agent({
               roleId: task.agent,
               provider,
               system: PROMPTS[task.agent],
               task: prompt,
               toolNames,
-              maxSteps: this.config.limits.maxSteps,
+              maxSteps: self.config.limits.maxSteps,
             });
 
-            results[task.id] = { ...out, ok: task.agent === 'reviewer' ? !/VEREDITO:\s*REPROVADO/i.test(out.text || '') : out.testsPassed !== false };
+            results[task.id] = {
+              ...out,
+              ok: task.agent === 'reviewer' ? !/VEREDITO:\s*REPROVADO/i.test(out.text || '') : out.testsPassed !== false,
+            };
 
             if (task.agent === 'reviewer') {
               reviewerVerdict = results[task.id].ok ? 'aprovado' : 'reprovado';
             }
 
-            this._emit('agent_done', task.agent, {
-              summary: this._summaryFor(task, out),
+            self._emit('agent_done', task.agent, {
+              summary: self._summaryFor(task, out),
               taskId: task.id,
             });
           } catch (err) {
             if (err instanceof Aborted || err instanceof BudgetExceeded) throw err;
             results[task.id] = { ok: false, text: err.message };
-            this._emit('agent_error', task.agent, { text: `${task.id}: ${err.message}` });
+            self._emit('agent_error', task.agent, { text: `${task.id}: ${err.message}` });
+          }
+        }
+      };
+
+      await Promise.all(
+        [...byAgent.values()].map(async (group) => {
+          for (const task of group) {
+            await runOne(task);
           }
         }),
       );
@@ -472,6 +506,9 @@ export class Orchestrator {
 
     // --- 3. encerramento ----------------------------------------------------
     const failed = Object.entries(results).filter(([, r]) => !r.ok);
+    const unverified = Object.entries(results)
+      .filter(([, r]) => r.ok && r.testsPassed === null && typeof r.testsPassed !== 'undefined')
+      .map(([id]) => id);
 
     this._emit('run_finished', null, {
       reason: failed.length ? 'parcial' : 'completed',
@@ -479,6 +516,7 @@ export class Orchestrator {
       total: { ...this.totals },
       tasks: tasks.length,
       failed: failed.map(([id]) => id),
+      unverified,
       verdict: reviewerVerdict,
       fellBack,
     });
@@ -489,12 +527,14 @@ export class Orchestrator {
       return /VEREDITO:\s*APROVADO/i.test(out.text || '') ? 'aprovado' : 'revisado';
     }
     if (task.agent === 'coder') {
-      return out.testsPassed ? 'implementado, testes passando' : 'implementado';
+      if (out.testsPassed === true) return 'implementado, testes passando';
+      if (out.testsPassed === false) return 'implementado, TESTES FALHANDO';
+      return 'implementado (nao verificado por testes)';
     }
     return 'concluido';
   }
 
-  // -- finalização -----------------------------------------------------------
+  // -- finalizaÃ§Ã£o -----------------------------------------------------------
 
   async _finalize(env) {
     if (!env || env.kind !== 'project') return;
@@ -555,15 +595,17 @@ export class Orchestrator {
     const tools = TOOL_DEFS.filter((t) => toolNames.includes(t.name));
     const messages = [
       { role: 'system', content: system },
-      { role: 'user', content: task },
+      { role: 'user', content: this._withBudgetNote(task, maxSteps) },
     ];
 
     this._emit('agent_thinking', roleId, { text: 'analisando a tarefa' });
 
-    let testsPassed = false;
-    let sawTestResult = false;
+    let testsPassed = null; // null = nenhum teste executado (nao verificado)
     let lastText = '';
     let steps = 0;
+
+    // Escopo do cache de leitura: uma conversa por execução de agente.
+    const scope = `${roleId}:${++this._scopeSeq}`;
 
     while (steps < maxSteps) {
       this._checkAbort();
@@ -599,13 +641,12 @@ export class Orchestrator {
 
         let outcome;
         try {
-          outcome = await this._tools.execute(call.name, call.args);
+          outcome = await this._tools.execute(call.name, call.args, scope);
         } catch (err) {
           outcome = { ok: false, summary: err.message, output: '' };
         }
 
         if (call.name === 'run_tests') {
-          sawTestResult = true;
           testsPassed = outcome.ok;
         }
 
@@ -628,7 +669,33 @@ export class Orchestrator {
       this._emit('agent_thinking', roleId, { text: `limite de ${maxSteps} passos atingido` });
     }
 
-    return { text: lastText, steps, testsPassed: sawTestResult ? testsPassed : true };
+    // testsPassed continua null quando nenhum teste rodou: isso vira
+    // "nao verificado" em vez de um falso "testes passando".
+    return { text: lastText, steps, testsPassed };
+  }
+
+  /**
+   * Lembrete de orÃ§amento no topo da tarefa.
+   *
+   * Sem isso os agentes leem 10 arquivos, releem os mesmos, e o teto de tokens
+   * acaba antes de escreverem qualquer coisa â€” foi exatamente o que aconteceu
+   * na primeira execuÃ§Ã£o real.
+   */
+  _withBudgetNote(task, maxSteps) {
+    const remaining = this.config.limits.maxTokens
+      ? Math.max(0, this.config.limits.maxTokens - (this.totals.in + this.totals.out))
+      : null;
+
+    const note = [
+      `[limites] Voce tem no maximo ${maxSteps} passos.`,
+      remaining !== null ? `Restam ~${remaining} tokens na execucao inteira (todos os agentes).` : '',
+      'Seja economico: leia so os arquivos que vai alterar (no maximo 3), nao releia o que ja leu,',
+      'e ESCREVA o codigo antes de esgotar os passos. Entregar sem escrever nao serve.',
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    return `${note}\n\n${task}`;
   }
 
   _shortArgs(args) {

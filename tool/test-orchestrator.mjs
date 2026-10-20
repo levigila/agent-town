@@ -232,6 +232,56 @@ process.env.AGENT_TOWN_RUNS_DIR = runsRoot;
 }
 
 // ===========================================================================
+// 3b. Sem rodar testes, o agente NAO pode dizer "testes passando"
+// ===========================================================================
+{
+  const events = [];
+  // coderWrites: false => o coder nunca chama run_tests
+  const fake = makeFakeProviders({ coderWrites: false });
+  const orch = new Orchestrator((ev) => events.push(ev), baseConfig(), { providerFactory: () => fake });
+
+  await runOrch(orch, { task: 'tarefa', mode: 'template', template: 'price-parser' });
+
+  const coderDone = events.find((e) => e.type === 'agent_done' && e.agentId === 'coder');
+  const finished = events.find((e) => e.type === 'run_finished');
+
+  expect(coderDone, 'coder deveria concluir');
+  expect(
+    !String(coderDone?.summary || '').includes('testes passando'),
+    `NAO pode afirmar testes passando sem rodar: "${coderDone?.summary}"`,
+  );
+  expect(
+    String(coderDone?.summary || '').includes('nao verificado'),
+    `summary deveria dizer nao verificado: "${coderDone?.summary}"`,
+  );
+  expect((finished?.unverified || []).length > 0, 'run_finished deveria listar tarefas nao verificadas');
+}
+
+// ===========================================================================
+// 3c. Duas tarefas do MESMO agente na mesma onda rodam em serie
+// ===========================================================================
+{
+  const events = [];
+  const twoCoderTasks = JSON.stringify({
+    tasks: [
+      { id: 'a', agent: 'coder', instruction: 'primeira', depends_on: [] },
+      { id: 'b', agent: 'coder', instruction: 'segunda', depends_on: [] },
+    ],
+  });
+  const fake = makeFakeProviders({ plannerReply: twoCoderTasks, coderWrites: false });
+
+  const orch = new Orchestrator((ev) => events.push(ev), baseConfig(), { providerFactory: () => fake });
+  await runOrch(orch, { task: 'tarefa', mode: 'template', template: 'price-parser' });
+
+  const plan = events.find((e) => e.type === 'plan_created');
+  expect(plan?.tasks?.length === 2, `plano deveria ter 2 tarefas: ${plan?.tasks?.length}`);
+  expect(plan?.waveCount === 1, `as duas deveriam estar na mesma onda: ${plan?.waveCount}`);
+
+  const peak = fake.limiters.fake.peak;
+  expect(peak <= 1, `tarefas do mesmo agente deveriam serializar (pico ${peak})`);
+}
+
+// ===========================================================================
 // 4. Projeto real: git branch, diff, commit
 // ===========================================================================
 {
