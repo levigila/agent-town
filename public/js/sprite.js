@@ -9,6 +9,36 @@ const R = (ctx, x, y, w, h, c) => {
   ctx.fillRect(Math.round(x), Math.round(y), Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
 };
 
+// Frequencia base da animacao de digitacao (ms por ciclo)
+const TYPE_FREQ = 110;
+// Amplitude do offset vertical dos bracos ao digitar (pixels)
+const TYPE_AMP = 1.5;
+
+/**
+ * Offset vertical dos bracos para o estado atual.
+ * Retorna { left, right } em pixels (arredondados), com fases opostas
+ * para que os bracos subam e desçam alternadamente ao digitar.
+ * @param {string} state estado do agente
+ * @param {number} now tempo em ms
+ * @param {number} swing balanco da caminhada (-1..1)
+ */
+function armOffsets(state, now, swing) {
+  if (state === 'walking') {
+    const o = Math.round(swing * 1.4);
+    return { left: o, right: -o };
+  }
+  if (state === 'working') {
+    // digitacao: bracos alternados, movimento sutil
+    const o = Math.sin(now / TYPE_FREQ) * TYPE_AMP;
+    return { left: Math.round(o), right: Math.round(-o) };
+  }
+  if (state === 'thinking') {
+    const o = Math.round(Math.sin(now / TYPE_FREQ) * 1.2);
+    return { left: o, right: -o };
+  }
+  return { left: 0, right: 0 };
+}
+
 /**
  * @param ctx canvas 2d no espaco do mundo (480x304)
  * @param agent instancia de AgentView (pos, state, facing, def.pal)
@@ -48,13 +78,12 @@ export function drawAgent(ctx, agent, now) {
   R(ctx, fx - 6, y - 15, 12, 2, shirt2);
 
   // bracos (digitando quando trabalhando, balancando quando anda)
-  let armOff = 0;
-  if (walking) armOff = Math.round(swing * 1.4);
-  else if (working) armOff = Math.round(Math.sin(now / 110) * 1.2);
-  R(ctx, fx - 8, y - 14 + armOff, 2, 7, shirt2);
-  R(ctx, fx + 6, y - 14 - armOff, 2, 7, shirt2);
-  R(ctx, fx - 8, y - 7 + armOff, 2, 2, p.skin);
-  R(ctx, fx + 6, y - 7 - armOff, 2, 2, p.skin);
+  // O offset e aplicado somente no desenho dos bracos/maos.
+  const arms = armOffsets(agent.state, now, swing);
+  R(ctx, fx - 8, y - 14 + arms.left, 2, 7, shirt2);
+  R(ctx, fx + 6, y - 14 + arms.right, 2, 7, shirt2);
+  R(ctx, fx - 8, y - 7 + arms.left, 2, 2, p.skin);
+  R(ctx, fx + 6, y - 7 + arms.right, 2, 2, p.skin);
 
   // cabeca
   R(ctx, fx - 5, y - 25, 10, 10, p.skin);

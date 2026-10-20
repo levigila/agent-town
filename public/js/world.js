@@ -8,6 +8,17 @@ const R = (ctx, x, y, w, h, c) => {
   ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
 };
 
+// helper de texto: centraliza/alinha e restaura o estado do ctx
+const T = (ctx, str, x, y, c, font = '9px monospace', align = 'center') => {
+  ctx.save();
+  ctx.fillStyle = c;
+  ctx.font = font;
+  ctx.textAlign = align;
+  ctx.textBaseline = 'middle';
+  ctx.fillText(str, Math.round(x), Math.round(y));
+  ctx.restore();
+};
+
 const COL = {
   floorA: '#242a38',
   floorB: '#202632',
@@ -27,6 +38,36 @@ const COL = {
   rug: '#3b3350',
   rug2: '#463c5e',
 };
+
+const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
+
+/**
+ * Relogio digital no canto superior direito da parede, formato HH:MM.
+ * @param ctx contexto 2d
+ * @param now timestamp em ms (Date.now()); se ausente usa o instante atual
+ */
+export function drawClock(ctx, now) {
+  const d = new Date(typeof now === 'number' ? now : Date.now());
+  const label = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+
+  const w = 44;
+  const h = 16;
+  const x = WORLD.w - w - 6;
+  const y = 10;
+
+  // moldura / corpo do relogio
+  R(ctx, x, y, w, h, '#0f1319');
+  R(ctx, x + 1, y + 1, w - 2, h - 2, '#121821');
+  R(ctx, x, y, w, 1, '#3a4358');
+
+  // display
+  T(ctx, label, x + w / 2, y + h / 2 + 1, '#8ef0c8', '10px monospace', 'center');
+
+  // pontinho piscando (separador) e brilho sutil
+  if (Math.floor((typeof now === 'number' ? now : Date.now()) / 1000) % 2 === 0) {
+    R(ctx, x + w - 5, y + 3, 2, 2, '#4be0c8');
+  }
+}
 
 /**
  * Piso em xadrez. As cores vem do tema escolhido no painel
@@ -71,11 +112,14 @@ export function drawWall(ctx, now) {
   R(ctx, 308, 27, 44, 2, '#b6bdc9');
   R(ctx, 350, 17, 26, 12, 'rgba(90,200,170,0.35)');
 
-  // relogio
+  // relogio analogico pequeno
   R(ctx, 234, 16, 14, 14, '#0f1319');
   R(ctx, 236, 18, 10, 10, '#e8eef7');
   R(ctx, 240, 20, 1, 4, '#2b3242');
   R(ctx, 241, 23, 3, 1, '#2b3242');
+
+  // relogio digital (canto superior direito da parede)
+  drawClock(ctx, Date.now());
 }
 
 export function drawPlants(ctx) {
