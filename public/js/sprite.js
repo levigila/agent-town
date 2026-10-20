@@ -2,6 +2,8 @@
 // Sem assets: tudo e retangulo, o que da o look pixel art e deixa
 // facil trocar por spritesheets depois.
 
+import { shirtOf, shade } from './config.js';
+
 const R = (ctx, x, y, w, h, c) => {
   ctx.fillStyle = c;
   ctx.fillRect(Math.round(x), Math.round(y), Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
@@ -14,6 +16,9 @@ const R = (ctx, x, y, w, h, c) => {
  */
 export function drawAgent(ctx, agent, now) {
   const p = agent.def.pal;
+  // Cor da camisa personalizada no painel (config.shirtOf cai no pal.shirt padrao)
+  const shirt = shirtOf(agent.def.id);
+  const shirt2 = shade(shirt, -0.16);
   const fx = Math.round(agent.pos.x);
   const fy = Math.round(agent.pos.y);
 
@@ -39,15 +44,15 @@ export function drawAgent(ctx, agent, now) {
   R(ctx, fx + 1, y - 2 + l2, 3, 2, p.shoe);
 
   // tronco
-  R(ctx, fx - 6, y - 15, 12, 10, p.shirt);
-  R(ctx, fx - 6, y - 15, 12, 2, p.shirt2);
+  R(ctx, fx - 6, y - 15, 12, 10, shirt);
+  R(ctx, fx - 6, y - 15, 12, 2, shirt2);
 
   // bracos (digitando quando trabalhando, balancando quando anda)
   let armOff = 0;
   if (walking) armOff = Math.round(swing * 1.4);
   else if (working) armOff = Math.round(Math.sin(now / 110) * 1.2);
-  R(ctx, fx - 8, y - 14 + armOff, 2, 7, p.shirt2);
-  R(ctx, fx + 6, y - 14 - armOff, 2, 7, p.shirt2);
+  R(ctx, fx - 8, y - 14 + armOff, 2, 7, shirt2);
+  R(ctx, fx + 6, y - 14 - armOff, 2, 7, shirt2);
   R(ctx, fx - 8, y - 7 + armOff, 2, 2, p.skin);
   R(ctx, fx + 6, y - 7 - armOff, 2, 2, p.skin);
 

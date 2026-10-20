@@ -1,6 +1,17 @@
 // UI da pagina: roster de agentes, log de eventos e controles.
 
-import { AGENT_LIST, TOOL_LABELS } from './config.js';
+import {
+  AGENT_LIST,
+  TOOL_LABELS,
+  THEME_IDS,
+  FLOOR_THEMES,
+  DEFAULT_THEME,
+  visuals,
+  loadVisuals,
+  setTheme,
+  setShirt,
+  shirtOf,
+} from './config.js';
 
 const STATE_LABEL = {
   idle: 'ocioso',
@@ -73,6 +84,11 @@ export class UI {
     };
     this.pickerState = { path: '', parent: null };
 
+    // personalizacao visual (tema do piso + camisa por agente)
+    this.themeEl = null;
+    this.shirtEls = new Map();
+
+    this.buildVisuals();
     this.buildRoster();
     this.wire();
   }
@@ -106,7 +122,99 @@ export class UI {
       }
     });
 
+    this.wireVisuals();
     this.syncMode();
+  }
+
+  // -- personalizacao visual ------------------------------------------------
+
+  /**
+   * Monta o bloco de personalizacao no painel lateral: select do tema do piso
+   * e um <input type="color"> por agente para a camisa. Os valores iniciais
+   * vem do localStorage (config.loadVisuals), com fallback no padrao.
+   */
+  buildVisuals() {
+    loadVisuals();
+
+    const box = document.createElement('section');
+    box.className = 'visuals-panel';
+    box.id = 'visualsPanel';
+    box.style.cssText = 'display:flex;flex-direction:column;gap:8px;padding:8px 0;';
+
+    const title = document.createElement('div');
+    title.className = 'visuals-title';
+    title.textContent = 'personalizacao';
+    title.style.cssText = 'font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.6;';
+    box.appendChild(title);
+
+    // tema do piso
+    const themeRow = document.createElement('label');
+    themeRow.className = 'visuals-row';
+    themeRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;';
+    themeRow.innerHTML = '<span>piso</span>';
+
+    const select = document.createElement('select');
+    select.id = 'themeSelect';
+    select.className = 'theme-select';
+    select.innerHTML = THEME_IDS.map(
+      (id) => `<option value="${escapeAttr(id)}">${escapeHtml(FLOOR_THEMES[id].label)}</option>`,
+    ).join('');
+    select.value = FLOOR_THEMES[visuals.theme] ? visuals.theme : DEFAULT_THEME;
+    themeRow.appendChild(select);
+    box.appendChild(themeRow);
+
+    // camisa por agente
+    const shirts = document.createElement('div');
+    shirts.className = 'visuals-shirts';
+    shirts.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+
+    for (const def of AGENT_LIST) {
+      const row = document.createElement('label');
+      row.className = 'visuals-row';
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;';
+
+      const name = document.createElement('span');
+      name.textContent = def.name;
+
+      const input = document.createElement('input');
+      input.type = 'color';
+      input.className = 'shirt-input';
+      input.id = `shirt-${def.id}`;
+      input.dataset.agent = def.id;
+      input.value = shirtOf(def.id);
+
+      row.append(name, input);
+      shirts.appendChild(row);
+      this.shirtEls.set(def.id, input);
+    }
+    box.appendChild(shirts);
+
+    // insere logo antes do roster (fica no topo do painel lateral)
+    this.visualsEl = box;
+    this.themeEl = select;
+    if (this.rosterEl?.parentNode) this.rosterEl.parentNode.insertBefore(box, this.rosterEl);
+    else document.body.appendChild(box);
+  }
+
+  wireVisuals() {
+    this.themeEl?.addEventListener('change', () => {
+      setTheme(this.themeEl.value);
+      this.handlers.onTheme?.(this.themeEl.value);
+    });
+
+    for (const [id, input] of this.shirtEls) {
+      // 'input' pinta ao vivo; o valor so e persistido se for hex valido
+      input.addEventListener('input', () => {
+        setShirt(id, input.value);
+        this.handlers.onShirt?.(id, input.value);
+      });
+    }
+  }
+
+  /** Reaplica os valores salvos nos controles (ex: ao iniciar a pagina). */
+  syncVisuals() {
+    if (this.themeEl) this.themeEl.value = FLOOR_THEMES[visuals.theme] ? visuals.theme : DEFAULT_THEME;
+    for (const [id, input] of this.shirtEls) input.value = shirtOf(id);
   }
 
   // -- seletor de pastas ----------------------------------------------------
