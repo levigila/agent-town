@@ -6,7 +6,7 @@
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { safeResolve, createTools } from '../src/tools.mjs';
+import { safeResolve, createTools, createWriteGuard } from '../src/tools.mjs';
 
 const problems = [];
 const expect = (cond, msg) => {
@@ -200,6 +200,55 @@ expect(leftovers.length === 0, `vazou arquivo de log no workspace: ${leftovers.j
   await tools.execute('write_file', { path: 'src/partes.txt', content: 'NOVO\n' });
   const replaced = await readFile(path.join(root, 'src', 'partes.txt'), 'utf8');
   expect(replaced === 'NOVO\n', 'sem append deveria substituir o conteudo');
+}
+
+// --- guarda de escrita: duas instâncias no mesmo arquivo -------------------
+{
+  const guard = createWriteGuard();
+  const shared = createTools(root, tmp, { writeGuard: guard });
+
+  const first = await shared.execute(
+    'write_file',
+    { path: 'src/compartilhado.txt', content: 'do coder-1' },
+    { scope: 'coder-1:t1', owner: 'coder-1' },
+  );
+  expect(first.ok, 'a primeira instancia deveria escrever sem problema');
+
+  // a mesma instância pode reescrever o próprio arquivo
+  const again = await shared.execute(
+    'write_file',
+    { path: 'src/compartilhado.txt', content: 'do coder-1 de novo' },
+    { scope: 'coder-1:t1', owner: 'coder-1' },
+  );
+  expect(again.ok, 'o dono deveria poder reescrever o proprio arquivo');
+
+  // outra instância NÃO pode sobrescrever
+  const blocked = await shared.execute(
+    'write_file',
+    { path: 'src/compartilhado.txt', content: 'do coder-2' },
+    { scope: 'coder-2:t2', owner: 'coder-2' },
+  );
+  expect(!blocked.ok, 'a segunda instancia NAO deveria escrever o mesmo arquivo');
+  expect(String(blocked.summary).includes('coder-1'), `summary deveria citar o dono: ${blocked.summary}`);
+
+  const content = await readFile(path.join(root, 'src', 'compartilhado.txt'), 'utf8');
+  expect(content === 'do coder-1 de novo', `o conteudo do dono deveria prevalecer: ${content}`);
+
+  // arquivo diferente: liberado
+  const other = await shared.execute(
+    'write_file',
+    { path: 'src/outro.txt', content: 'do coder-2' },
+    { scope: 'coder-2:t2', owner: 'coder-2' },
+  );
+  expect(other.ok, 'arquivo diferente deveria ser livre para outra instancia');
+}
+
+// --- sem guarda, o comportamento antigo continua ---------------------------
+{
+  const plain = createTools(root, tmp);
+  const a = await plain.execute('write_file', { path: 'src/livre.txt', content: 'a' }, { owner: 'x' });
+  const b = await plain.execute('write_file', { path: 'src/livre.txt', content: 'b' }, { owner: 'y' });
+  expect(a.ok && b.ok, 'sem guarda configurada nao deveria haver bloqueio');
 }
 
 await rm(dir, { recursive: true, force: true });

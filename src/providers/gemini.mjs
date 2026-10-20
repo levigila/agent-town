@@ -81,7 +81,7 @@ export function createGeminiProvider(providerConfig, model) {
       return `${key}:${model}`;
     },
 
-    async chat({ messages, tools, temperature = 0.2, maxTokens = 2048, signal, onRetry }) {
+    async chat({ messages, tools, temperature = 0.2, maxTokens = 2048, signal, onRetry, onRateLimit }) {
       const { systemParts, contents } = toGeminiContents(messages);
 
       const body = {
@@ -101,7 +101,7 @@ export function createGeminiProvider(providerConfig, model) {
 
       const url = `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-      const data = await postJson({ url, headers: {}, body, signal, onRetry });
+      const data = await postJson({ url, headers: {}, body, signal, onRetry, onRateLimit });
 
       const candidate = data?.candidates?.[0];
       if (!candidate) {

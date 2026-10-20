@@ -117,6 +117,15 @@ const events = [
   { type: 'agent_error', agentId: 'researcher', text: 'rate limit' },
 ];
 
+// Os eventos acima usam o PAPEL ("coder"). Agora os agentes tem instancias
+// ("coder-1", "coder-2"), entao traduzimos antes de aplicar: um evento de
+// papel vai para a primeira instancia daquele papel.
+const idOfRole = (role) => AGENT_DEFS.find((a) => a.role === role)?.id || role;
+for (const ev of events) {
+  if (ev.agentId) ev.agentId = idOfRole(ev.agentId);
+  if (ev.to) ev.to = idOfRole(ev.to);
+}
+
 const start = Object.fromEntries(Object.entries(agents).map(([k, a]) => [k, { ...a.pos }]));
 for (const ev of events) applyEvent(agents, ev, ui);
 
@@ -152,9 +161,9 @@ if (!atHome) {
 }
 
 // pick() precisa achar o agente pela coordenada do mouse
-const target = agents.coder;
+const target = agents[idOfRole('coder')];
 const hit = renderer.pick(target.pos.x * renderer.k, (target.pos.y - 12) * renderer.k);
-if (!hit || hit.def.id !== 'coder') problems.push('pick() nao encontrou o agente na sua posicao');
+if (!hit || hit.def.id !== target.def.id) problems.push('pick() nao encontrou o agente na sua posicao');
 if (renderer.pick(0, 0)) problems.push('pick() encontrou agente no canto vazio');
 
 // reset + snapshot nao podem quebrar

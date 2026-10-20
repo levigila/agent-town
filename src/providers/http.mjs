@@ -13,6 +13,37 @@ export class ProviderError extends Error {
 }
 
 /**
+ * Extrai os headers de limite de requisição.
+ *
+ * Para chave de PLANO (assinatura mensal), estes headers são a única medida
+ * real de consumo — não existe cobrança por token. O 402 "prepaid balance"
+ * só aparece em chave pré-paga.
+ */
+export function readRateLimit(headers) {
+  if (!headers) return null;
+
+  const num = (name) => {
+    const raw = headers.get(name);
+    if (raw === null) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const limit = num('x-ratelimit-limit');
+  const remaining = num('x-ratelimit-remaining');
+  const reset = num('x-ratelimit-reset');
+
+  if (limit === null && remaining === null) return null;
+
+  return {
+    limit,
+    remaining,
+    reset,
+    resetAt: reset ? new Date(reset * 1000).toISOString() : null,
+  };
+}
+
+/**
  * POST JSON com retry exponencial.
  * @param {object} opts
  * @param {string} opts.url
@@ -21,8 +52,18 @@ export class ProviderError extends Error {
  * @param {AbortSignal} [opts.signal]
  * @param {number} [opts.retries]
  * @param {(msg: string) => void} [opts.onRetry]
+ * @param {(info: object) => void} [opts.onRateLimit] recebe os headers de limite
  */
-export async function postJson({ url, headers, body, signal, retries = 3, onRetry, timeoutMs = 120000 }) {
+export async function postJson({
+  url,
+  headers,
+  body,
+  signal,
+  retries = 3,
+  onRetry,
+  onRateLimit,
+  timeoutMs = 120000,
+}) {
   let lastError;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -36,6 +77,9 @@ export async function postJson({ url, headers, body, signal, retries = 3, onRetr
         body: JSON.stringify(body),
         signal: combined,
       });
+
+      const rate = readRateLimit(res.headers);
+      if (rate) onRateLimit?.(rate);
 
       if (res.ok) {
         return await res.json();

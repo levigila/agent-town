@@ -11,9 +11,20 @@ export const DESK = {
   xs: [24, 144, 264, 384],
 };
 
-// Onde o agente senta (pe do sprite) e onde ele fica em pe na frente da mesa
-export const seatOf = (i) => ({ x: DESK.xs[i] + 44, y: DESK.top + 8 });
-export const standOf = (i) => ({ x: DESK.xs[i] + 44, y: DESK.top + DESK.h + 18 });
+// Onde o agente senta (pe do sprite) e onde ele fica em pe na frente da mesa.
+// Duas instancias dividem a mesma mesa: slot 0 senta a esquerda, slot 1 a
+// direita. Com uma instancia so, ela fica no centro.
+const SLOT_DX = [-18, 18];
+const slotOffset = (slot, slots) => (slots > 1 ? SLOT_DX[slot] ?? 0 : 0);
+
+export const seatOf = (i, slot = 0, slots = 1) => ({
+  x: DESK.xs[i] + 44 + slotOffset(slot, slots),
+  y: DESK.top + 8,
+});
+export const standOf = (i, slot = 0, slots = 1) => ({
+  x: DESK.xs[i] + 44 + slotOffset(slot, slots),
+  y: DESK.top + DESK.h + 18,
+});
 
 // Mesa de reuniao no centro-baixo
 export const MEETING = { x: 240, y: 214, rx: 48, ry: 21 };
@@ -24,12 +35,35 @@ export const MEETING_SPOTS = [
   { x: 240, y: 250 },
 ];
 
-export const AGENT_LIST = [
+// Helpers de cor. Ficam aqui em cima porque buildAgentList() ja os usa para
+// gerar a paleta das instancias 2, 3... (usar antes da definicao cairia em TDZ).
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+
+/** Cor hex valida no formato #rrggbb (o que o <input type="color"> entrega). */
+export const isHexColor = (value) => typeof value === 'string' && HEX_RE.test(value.trim());
+
+/** Escurece (amount < 0) ou clareia (amount > 0) uma cor hex. */
+export const shade = (hex, amount) => {
+  if (!isHexColor(hex)) return hex;
+  const n = parseInt(hex.slice(1), 16);
+  const mix = (c) => Math.max(0, Math.min(255, Math.round(c + 255 * amount)));
+  const r = mix((n >> 16) & 255);
+  const g = mix((n >> 8) & 255);
+  const b = mix(n & 255);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+};
+
+// Quantas instancias de cada funcao executora existem na cena.
+// Precisa bater com AGENTS_PER_ROLE do servidor; o /api/state confirma.
+export const AGENTS_PER_ROLE = 2;
+
+// Modelo-base de cada papel. As instancias herdam e so mudam a paleta.
+const ROLE_BASE = [
   {
-    id: 'planner',
+    role: 'planner',
     name: 'Planner',
-    role: 'Orquestrador',
-    model: 'v4 pro',
+    roleName: 'Orquestrador',
+    model: 'v4.1 flash',
     accent: '#a78bfa',
     desk: 0,
     pal: {
@@ -42,10 +76,10 @@ export const AGENT_LIST = [
     },
   },
   {
-    id: 'researcher',
+    role: 'researcher',
     name: 'Researcher',
-    role: 'Pesquisa',
-    model: 'GLM 5.3 Flash',
+    roleName: 'Pesquisa',
+    model: 'glm 5.3 flash',
     accent: '#f5a623',
     desk: 1,
     pal: {
@@ -58,9 +92,9 @@ export const AGENT_LIST = [
     },
   },
   {
-    id: 'coder',
+    role: 'coder',
     name: 'Coder',
-    role: 'Implementacao',
+    roleName: 'Implementacao',
     model: 'v4.1 flash',
     accent: '#4be0c8',
     desk: 2,
@@ -74,10 +108,10 @@ export const AGENT_LIST = [
     },
   },
   {
-    id: 'reviewer',
+    role: 'reviewer',
     name: 'Reviewer',
-    role: 'Revisao',
-    model: 'v4 flash vision',
+    roleName: 'Revisao',
+    model: 'qwen3.8 27b',
     accent: '#4da3ff',
     desk: 3,
     pal: {
@@ -91,15 +125,73 @@ export const AGENT_LIST = [
   },
 ];
 
+/**
+ * Monta a lista de agentes da cena.
+ *
+ * O Planner e unico (so existe um planejamento por execucao). Cada papel
+ * executor ganha AGENTS_PER_ROLE instancias: "coder-1", "coder-2". Elas
+ * dividem a mesma mesa, sentadas lado a lado, e a segunda usa um tom mais
+ * escuro de camisa para dar para distinguir no pixel.
+ */
+function buildAgentList() {
+  const list = [];
+
+  for (const base of ROLE_BASE) {
+    const count = base.role === 'planner' ? 1 : AGENTS_PER_ROLE;
+
+    for (let i = 0; i < count; i++) {
+      const id = count > 1 ? `${base.role}-${i + 1}` : base.role;
+      const tint = count > 1 ? i * 0.1 : 0;
+
+      list.push({
+        id,
+        role: base.role,
+        index: i,
+        name: count > 1 ? `${base.name} ${i + 1}` : base.name,
+        roleName: base.roleName,
+        model: base.model,
+        accent: base.accent,
+        desk: base.desk,
+        slot: i,
+        slots: count,
+        pal: {
+          ...base.pal,
+          // instancia 2+: camisa mais escura, cabelo levemente diferente
+          shirt: shade(base.pal.shirt, -tint),
+          shirt2: shade(base.pal.shirt2, -tint),
+          hair: i === 0 ? base.pal.hair : shade(base.pal.hair, 0.12),
+        },
+      });
+    }
+  }
+
+  return list;
+}
+
+export const AGENT_LIST = buildAgentList();
+
 // Lista enriquecida com as posicoes no mundo (o que o AgentView consome)
 export const AGENT_DEFS = AGENT_LIST.map((a) => ({
   ...a,
-  seat: seatOf(a.desk),
-  stand: standOf(a.desk),
-  home: seatOf(a.desk),
+  seat: seatOf(a.desk, a.slot, a.slots),
+  stand: standOf(a.desk, a.slot, a.slots),
+  home: seatOf(a.desk, a.slot, a.slots),
 }));
 
 export const AGENTS = Object.fromEntries(AGENT_DEFS.map((a) => [a.id, a]));
+
+/** Ids curtos por papel: ['coder-1', 'coder-2'] para role 'coder'. */
+export const instancesOfRole = (role) => AGENT_LIST.filter((a) => a.role === role).map((a) => a.id);
+
+/**
+ * Descobre o agente de um id de evento.
+ *
+ * O servidor manda ids de instancia ('coder-2'); eventos antigos ou de
+ * fallback podem mandar so o papel ('coder'). Nesse caso usamos a primeira
+ * instancia, para o log nunca ficar sem rotulo.
+ */
+export const agentOf = (id) =>
+  AGENTS[id] || AGENTS[instancesOfRole(id)[0]] || null;
 
 // Rotulos amigaveis para os eventos no log
 export const TOOL_LABELS = {
@@ -125,22 +217,6 @@ export const FLOOR_THEMES = {
   blue: { label: 'azul', floorA: '#1c3a5c', floorB: '#17324f', seam: '#12283f' },
 };
 export const THEME_IDS = Object.keys(FLOOR_THEMES);
-
-const HEX_RE = /^#[0-9a-fA-F]{6}$/;
-
-/** Cor hex valida no formato #rrggbb (o que o <input type="color"> entrega). */
-export const isHexColor = (value) => typeof value === 'string' && HEX_RE.test(value.trim());
-
-/** Escurece (amount < 0) ou clareia (amount > 0) uma cor hex. */
-export const shade = (hex, amount) => {
-  if (!isHexColor(hex)) return hex;
-  const n = parseInt(hex.slice(1), 16);
-  const mix = (c) => Math.max(0, Math.min(255, Math.round(c + 255 * amount)));
-  const r = mix((n >> 16) & 255);
-  const g = mix((n >> 8) & 255);
-  const b = mix(n & 255);
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
-};
 
 /** Camisa padrao do agente (fallback quando nao ha personalizacao). */
 export const defaultShirtOf = (id) => AGENT_LIST.find((a) => a.id === id)?.pal.shirt || '#7c5cff';

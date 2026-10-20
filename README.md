@@ -183,6 +183,122 @@ git checkout master && git branch -D agent-town/<runId>   # descartar
 
 Sem esse arquivo, o `run_tests` usa o runner do Node (`test/*.test.mjs`).
 
+### Mais agentes por função (`AGENTS_PER_ROLE`)
+
+Por padrão cada função tem **duas instâncias**: `coder-1` e `coder-2`,
+`researcher-1` e `researcher-2`, `reviewer-1` e `reviewer-2`. O Planner é único.
+
+```env
+AGENTS_PER_ROLE=2   # 1, 2 ou 3
+```
+
+Na cena, as duas instâncias da mesma função **dividem a mesma mesa**, sentadas
+lado a lado, com a segunda usando um tom mais escuro de camisa.
+
+O Planner sabe quantas instâncias existem e pode distribuí-las:
+
+```json
+{ "tasks": [
+  { "id": "t1", "agent": "coder-1", "instruction": "mexer em public/js/world.js", "depends_on": [] },
+  { "id": "t2", "agent": "coder-2", "instruction": "mexer em public/js/sprite.js", "depends_on": [] }
+] }
+```
+
+Ele também pode escrever só `"coder"` — nesse caso o **escalonador** escolhe
+qual instância estiver livre. As regras de execução:
+
+| situação | comportamento |
+|---|---|
+| tarefas em instâncias **diferentes** | rodam em **paralelo** |
+| duas tarefas na **mesma instância** | rodam em **série** (uma conversa por vez) |
+| instância específica pedida | respeitada, sem substituição |
+| todas ocupadas | a primeira assume; o agrupamento serializa |
+
+**Aviso honesto sobre o ganho.** O paralelismo é limitado pela concorrência do
+provedor, não pelo número de agentes. Com `VERBOO_CONCURRENCY=2`, só duas
+chamadas acontecem ao mesmo tempo — três instâncias não aceleram mais que duas,
+apenas esperam na fila. O ganho real vem de **dividir trabalho em arquivos
+diferentes**, não de ter mais bonequinhos.
+
+#### Conflito de escrita
+
+Duas instâncias escrevendo o mesmo arquivo é a forma mais fácil de perder
+trabalho: a segunda sobrescreve a primeira em silêncio. A guarda em
+`src/tools.mjs` (`createWriteGuard`) torna isso impossível:
+
+- o primeiro agente que escreve um arquivo vira **dono** dele na execução;
+- o dono pode continuar editando à vontade;
+- outra instância recebe um erro explicando quem é o dono, e é orientada a
+  escolher outro arquivo.
+
+### Agentes do OpenCode
+
+O [OpenCode](https://opencode.ai) guarda agentes como Markdown com frontmatter
+YAML. O agent-town **lê esses arquivos** e os transforma em agentes de verdade.
+
+Onde ele procura, do mais específico para o mais global:
+
+```
+<projeto>/.opencode/agent/*.md
+<projeto>/.opencode/agents/*.md
+~/.config/opencode/agent/*.md
+~/.config/opencode/agents/*.md
+```
+
+Um arquivo assim:
+
+```markdown
+---
+description: Writes and maintains project documentation
+mode: subagent
+model: verboo:deepseek-v4.1-flash
+permission:
+  edit: deny
+---
+
+You are a technical writer. Create clear documentation.
+```
+
+vira um agente com:
+
+| campo do OpenCode | vira |
+|---|---|
+| nome do arquivo | `id` do agente |
+| corpo do Markdown | system prompt |
+| `permission.edit: deny` | somente leitura (`list_files`, `read_file`) |
+| `permission.edit: allow` (ou ausente) | com escrita (+ `write_file`, `run_tests`) |
+| `tools.write: false` | somente leitura |
+| `model` | modelo usado (formato `provider:modelo`) |
+| `description` | nome exibido |
+
+Liste o que foi encontrado:
+
+```powershell
+curl.exe -s "http://127.0.0.1:4173/api/agents?project=C:\seu-projeto"
+```
+
+Para usar numa execução, mande os agentes já convertidos em `extraAgents`:
+
+```powershell
+$oc = (curl.exe -s "http://127.0.0.1:4173/api/agents?project=C:\proj" | ConvertFrom-Json).opencode.agents
+$body = @{
+  task         = "..."
+  mode         = "project"
+  projectPath  = "C:\proj"
+  extraAgents  = $oc
+} | ConvertTo-Json -Depth 6
+```
+
+Eles entram como instâncias extras: o Planner passa a vê-los e o escalonador os
+trata como qualquer outro agente. Sem `model` no frontmatter, herdam o modelo do
+Coder.
+
+**Limites da conversão.** O frontmatter é lido por um parser do subconjunto que
+o OpenCode usa (`chave: valor` e um nível de aninhamento) — não é YAML completo,
+porque o projeto é zero-dependency. O agent-town também não executa shell
+arbitrário, então `permission.shell` é ignorado: os agentes só têm as 4
+ferramentas internas.
+
 ---
 
 ## 4. Variáveis do `.env`
@@ -200,8 +316,10 @@ Sem esse arquivo, o `run_tests` usa o runner do Node (`test/*.test.mjs`).
 | `REVIEWER_MODEL` | `verboo:qwen3.8-27b` | família diferente = revisão cruzada |
 | `MAX_STEPS` | `10` | passos por agente |
 | `MAX_TASKS` | `6` | tarefas máximas num plano |
+| `MAX_OUTPUT_TOKENS` | `8192` | teto de **saída** por chamada — baixo demais trunca o `write_file` |
+| `AGENTS_PER_ROLE` | `2` | instâncias por função executora (1–3) |
 | `MAX_TOKENS` | `200000` | teto de tokens por execução (sempre funciona) |
-| `BUDGET_USD` | `0.50` | teto de gasto estimado (usa `pricing.json`) |
+| `BUDGET_USD` | `0.50` | teto de gasto **estimado** (usa `pricing.json`) |
 | `TIMEOUT_SEC` | `600` | tempo máximo da execução |
 | `HOST` | `127.0.0.1` | `127.0.0.1` = livre escolha de pasta · `0.0.0.0` = exige `PROJECT_ROOTS` |
 | `PROJECT_ROOTS` | — | só obrigatório se expuser o servidor; funciona como allowlist |
@@ -211,6 +329,30 @@ Sem esse arquivo, o `run_tests` usa o runner do Node (`test/*.test.mjs`).
 Quem manda é `GET /models` com a sua chave — `npm run doctor` mostra os IDs
 exatos. No plano API pré-pago: `deepseek-v4.1-flash`, `glm-5.3-flash`,
 `mimo-v2.6-flash`, `qwen3.8-27b`.
+
+### O valor em dólar NÃO é uma cobrança
+
+O número que aparece na tela (`US$ 0,029`, por exemplo) é uma **estimativa
+calculada localmente**: `src/pricing.mjs` multiplica os tokens contados pelo
+preço por milhão que está em `pricing.json`. Nenhuma chamada é feita ao
+faturamento da Verboo, e o valor não aparece em lugar nenhum da sua conta.
+
+A confusão é justa, porque a API tem dois tipos de chave e só uma delas cobra:
+
+| tipo de chave | como cobra | como medir o consumo |
+|---|---|---|
+| **plano / assinatura** (`vbk_pro_...`) | mensalidade fixa, uso dentro do plano | headers `X-RateLimit-*` (requisições por janela) |
+| **pré-paga** | por token, desconta saldo | `402 Insufficient prepaid balance` quando acaba |
+
+Com chave de plano, **não existe cobrança por token** — a documentação da Verboo
+só usa o status `402` para saldo pré-pago insuficiente. O limite real do plano é
+de **requisições**: `X-RateLimit-Limit: 40` por minuto, com
+`X-RateLimit-Remaining` e `X-RateLimit-Reset` na resposta.
+
+Na prática: use o número em dólar para comparar execuções entre si (esta custou
+3× aquela), não como extrato. Para saber o consumo real, olhe as requisições —
+o `npm run doctor` e a faixa de limite do painel mostram isso.
+
 
 Modelo fora do seu plano responde `404 model not available in any of your groups`.
 

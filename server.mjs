@@ -17,6 +17,7 @@ import { Orchestrator } from './src/orchestrator.mjs';
 import { loadEnv } from './src/env.mjs';
 import { loadConfig, validateRealMode } from './src/config.mjs';
 import { browseDirectory } from './src/project.mjs';
+import { loadOpenCodeAgents } from './src/opencode.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -213,7 +214,19 @@ const server = http.createServer(async (req, res) => {
         allowAny: config.allowAnyPath,
         templates: ['price-parser'],
         maxTasks: config.limits.maxTasks,
+        agentsPerRole: config.limits.agentsPerRole,
         enabled: config.allowAnyPath || config.projectRoots.length > 0,
+      });
+    }
+
+    // Agentes disponíveis: as instâncias internas + as do OpenCode.
+    if (pathname === '/api/agents') {
+      const projectPath = url.searchParams.get('project') || '';
+      const oc = await loadOpenCodeAgents(projectPath || undefined);
+      return sendJson(res, {
+        instances: config.agents || [],
+        perRole: config.limits.agentsPerRole,
+        opencode: { agents: oc.agents, errors: oc.errors, dirs: oc.dirs },
       });
     }
 

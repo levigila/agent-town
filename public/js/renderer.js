@@ -133,11 +133,16 @@ export class Renderer {
       .forEach((a) => drawAgent(ctx, a, now));
 
     // mesas (desenhadas na frente de quem esta sentado)
+    // Cada mesa pode ter mais de um agente (duas instancias da mesma funcao),
+    // entao a mesa acende se QUALQUER um dos seus ocupantes estiver ativo.
     for (let i = 0; i < DESK.xs.length; i++) {
-      const owner = AGENT_LIST[i];
-      const ag = owner ? this.agents[owner.id] : null;
-      const on = !!ag && (ag.state === 'working' || ag.state === 'thinking');
-      W.drawDesk(ctx, i, on, owner ? owner.accent : '#4be0c8', now);
+      const owners = AGENT_LIST.filter((a) => a.desk === i);
+      const on = owners.some((o) => {
+        const ag = this.agents[o.id];
+        return ag && (ag.state === 'working' || ag.state === 'thinking');
+      });
+      const accent = owners[0] ? owners[0].accent : '#4be0c8';
+      W.drawDesk(ctx, i, on, accent, now);
     }
 
     // agentes no corredor (atras da mesa de reuniao)

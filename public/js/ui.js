@@ -11,6 +11,7 @@ import {
   setTheme,
   setShirt,
   shirtOf,
+  agentOf,
 } from './config.js';
 
 const STATE_LABEL = {
@@ -61,6 +62,7 @@ export class UI {
     this.templateField = document.getElementById('templateField');
     this.projectField = document.getElementById('projectField');
     this.modeBadge = document.getElementById('modeBadge');
+    this.rateBadge = document.getElementById('rateBadge');
 
     this.planPanel = document.getElementById('planPanel');
     this.planList = document.getElementById('planList');
@@ -323,6 +325,30 @@ export class UI {
     }
   }
 
+  /**
+   * Mostra as requisicoes restantes na janela do provedor.
+   *
+   * Este e o consumo REAL de uma chave de plano: o limite e por requisicao,
+   * nao por token. O valor em dolar do rodape e so uma estimativa local.
+   */
+  renderRateLimit() {
+    const el = this.rateBadge;
+    if (!el) return;
+
+    const rl = this.rateLimit;
+    if (!rl || rl.remaining === null || rl.remaining === undefined) {
+      el.hidden = true;
+      return;
+    }
+
+    el.hidden = false;
+    el.textContent = `${rl.remaining}/${rl.limit ?? '?'} req`;
+    el.dataset.tone = rl.remaining <= 0 ? 'out' : rl.remaining <= 5 ? 'low' : 'ok';
+    el.title = rl.resetAt
+      ? `Requisicoes restantes na janela · renova as ${new Date(rl.resetAt).toLocaleTimeString('pt-BR')}`
+      : 'Requisicoes restantes na janela do provedor';
+  }
+
   setMode(mode, { projectsEnabled } = {}) {
     const real = mode === 'real';
     this.modeBadge.textContent = real ? 'real · api' : 'simulado';
@@ -357,7 +383,7 @@ export class UI {
       const li = document.createElement('li');
       li.className = 'plan-item';
       li.dataset.task = task.id;
-      li.style.setProperty('--accent', AGENT_LIST.find((a) => a.id === task.agent)?.accent || '#4be0c8');
+      li.style.setProperty('--accent', agentOf(task.agent)?.accent || '#4be0c8');
       li.innerHTML = `
         <span class="plan-id">${escapeHtml(task.id)}</span>
         <span class="plan-agent">${escapeHtml(task.agent)}</span>
@@ -514,6 +540,11 @@ export class UI {
     this.tokens = {};
     for (const c of this.cards.values()) c.tokens.textContent = '0 tok';
     for (const c of this.cards.values()) c.state.textContent = STATE_LABEL.idle;
+
+    // O limite de requisicoes e do provedor, nao da execucao: ele continua
+    // valendo entre execucoes, entao nao zeramos aqui. So limpamos se nunca
+    // houve leitura.
+    this.renderRateLimit();
   }
 
   clearLog() {
@@ -551,13 +582,24 @@ export class UI {
     const msg = document.createElement('span');
     msg.className = 'entry-msg';
 
-    const def = AGENT_LIST.find((a) => a.id === ev.agentId);
+    const def = agentOf(ev.agentId);
 
     switch (ev.type) {
       case 'run_started':
         li.classList.add('is-run');
         who.textContent = 'RUN';
         msg.textContent = `${ev.label || 'execucao'} #${ev.cycle || 1} iniciada`;
+        break;
+
+      case 'rate_limit':
+        // Consumo REAL de uma chave de plano: requisições na janela.
+        li.classList.add('is-run');
+        who.textContent = 'LIMITE';
+        msg.textContent =
+          `${ev.remaining ?? '?'}/${ev.limit ?? '?'} requisicoes restantes` +
+          (ev.resetAt ? ` · renova ${new Date(ev.resetAt).toLocaleTimeString('pt-BR')}` : '');
+        this.rateLimit = ev;
+        this.renderRateLimit?.();
         break;
 
       case 'run_finished':

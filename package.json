@@ -1,6 +1,6 @@
 {
   "name": "agent-town",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Observatorio visual de agentes de IA — grafo de tarefas, execucao real e modo projeto",
@@ -12,7 +12,7 @@
     "smoke": "node tool/smoke.mjs",
     "preview": "node tool/preview.mjs preview.png",
     "verify-template": "node tool/verify-template.mjs",
-    "test": "node tool/check.mjs . && node tool/smoke.mjs && node tool/test-graph.mjs && node tool/verify-template.mjs && node tool/test-tools.mjs && node tool/test-project.mjs && node tool/test-orchestrator.mjs && node tool/test-adapters.mjs"
+    "test": "node tool/check.mjs . && node tool/smoke.mjs && node tool/test-graph.mjs && node tool/verify-template.mjs && node tool/test-tools.mjs && node tool/test-project.mjs && node tool/test-orchestrator.mjs && node tool/test-adapters.mjs && node tool/test-agents.mjs && node tool/test-parallel.mjs"
   },
   "engines": {
     "node": ">=20"

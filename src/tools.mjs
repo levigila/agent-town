@@ -1,6 +1,6 @@
-﻿// Ferramentas que os agentes podem executar.
+// Ferramentas que os agentes podem executar.
 //
-// SEGURANÃ‡A: tudo fica preso ao diretÃ³rio do workspace da execuÃ§Ã£o.
+// SEGURANÇA: tudo fica preso ao diretório do workspace da execução.
 // Nenhum caminho pode escapar dele (nem com .., nem com absoluto).
 
 import { readFile, writeFile, appendFile, readdir, mkdir, stat } from 'node:fs/promises';
@@ -58,8 +58,8 @@ export function safeResolve(root, rel) {
   const raw = String(rel ?? '').trim();
   if (!raw) throw new Error('caminho vazio');
 
-  // Caminho absoluto Ã© recusado de frente: o contrato da ferramenta Ã©
-  // "relativo Ã  raiz". Remapear silenciosamente confundiria o agente.
+  // Caminho absoluto é recusado de frente: o contrato da ferramenta é
+  // "relativo à raiz". Remapear silenciosamente confundiria o agente.
   if (path.isAbsolute(raw) || /^[a-zA-Z]:/.test(raw) || raw.startsWith('\\\\')) {
     throw new Error(`caminho absoluto nao permitido: ${rel}`);
   }
@@ -128,7 +128,7 @@ function runProcess({ command, args, cwd, timeoutMs = 60000, logPath }) {
       try {
         closeSync(fd);
       } catch {
-        /* jÃ¡ fechado */
+        /* já fechado */
       }
       let output = '';
       try {
@@ -143,7 +143,7 @@ function runProcess({ command, args, cwd, timeoutMs = 60000, logPath }) {
       try {
         child?.kill('SIGKILL');
       } catch {
-        /* jÃ¡ morreu */
+        /* já morreu */
       }
       finish(-1, `\n[timeout de ${timeoutMs}ms]`);
     }, timeoutMs);
@@ -165,47 +165,91 @@ function runProcess({ command, args, cwd, timeoutMs = 60000, logPath }) {
 }
 
 /**
- * @param {string} root diretÃ³rio onde os agentes podem atuar
- * @param {string} tmpDir diretÃ³rio para logs (fora do root)
+ * Registro de quem é dono de cada arquivo durante uma execução.
+ *
+ * Com várias instâncias de coder trabalhando em paralelo, dois agentes podem
+ * escrever o mesmo arquivo — o segundo apaga o trabalho do primeiro sem que
+ * ninguém perceba. A guarda torna isso visível: o primeiro que escreve vira
+ * dono, e o outro recebe um erro explicando o conflito.
+ *
+ * A posse é "pegajosa" dentro da execução (o dono continua podendo editar),
+ * o que é o comportamento certo: quem começou o arquivo termina o arquivo.
+ */
+export function createWriteGuard() {
+  const owners = new Map(); // caminho relativo -> id do agente
+
+  return {
+    /**
+     * Pede o arquivo para o agente.
+     * @returns {{ok: true} | {ok: false, owner: string}}
+     */
+    claim(relPath, agentId) {
+      const owner = owners.get(relPath);
+      if (owner && owner !== agentId) return { ok: false, owner };
+      owners.set(relPath, agentId);
+      return { ok: true };
+    },
+
+    ownerOf(relPath) {
+      return owners.get(relPath) || null;
+    },
+
+    /** Arquivos escritos, para o relatório final. */
+    snapshot() {
+      return Object.fromEntries(owners);
+    },
+  };
+}
+
+/**
+ * @param {string} root diretório onde os agentes podem atuar
+ * @param {string} tmpDir diretório para logs (fora do root)
  * @param {object} [options]
  * @param {string[]|null} [options.testCommand] comando de teste do projeto
  * @param {number} [options.testTimeoutMs] timeout do comando de teste
- * @param {string[]} [options.ignore] padrÃµes extras a esconder do list_files
+ * @param {string[]} [options.ignore] padrões extras a esconder do list_files
+ * @param {object} [options.writeGuard] guarda de conflito compartilhada
  */
 export function createTools(root, tmpDir, options = {}) {
   const testCommand = Array.isArray(options.testCommand) ? options.testCommand : null;
   const testTimeoutMs = Number(options.testTimeoutMs) > 0 ? Number(options.testTimeoutMs) : 180000;
   const extraIgnore = Array.isArray(options.ignore) ? options.ignore : [];
+  const writeGuard = options.writeGuard || null;
 
-  // Arquivos jÃ¡ lidos, POR CONVERSA. Releitura devolve um aviso curto em vez
-  // do conteÃºdo inteiro: o modelo esquece o que leu e relÃª, e cada releitura
+  // Arquivos já lidos, POR CONVERSA. Releitura devolve um aviso curto em vez
+  // do conteúdo inteiro: o modelo esquece o que leu e relê, e cada releitura
   // custa o arquivo inteiro em tokens de novo.
   //
   // A chave inclui o escopo (um por agente/tarefa). Sem isso, o agente B
-  // receberia "jÃ¡ lido" de um arquivo que sÃ³ o agente A viu â€” e ficaria cego.
+  // receberia "já lido" de um arquivo que só o agente A viu — e ficaria cego.
   const reads = new Set();
 
   return {
     root,
+    writeGuard,
 
     /**
-     * Executa uma ferramenta. NUNCA lanÃ§a: sempre devolve
-     * { ok, summary, output } â€” inclusive para caminho invÃ¡lido.
+     * Executa uma ferramenta. NUNCA lança: sempre devolve
+     * { ok, summary, output } — inclusive para caminho inválido.
      *
      * @param {string} name
      * @param {object} args
-     * @param {string} [scope] identifica a conversa (para o cache de leitura)
+     * @param {string|{scope: string, owner?: string}} [ctx]
+     *   string = só o escopo da conversa; objeto = escopo + dono (para a guarda)
      */
-    async execute(name, args = {}, scope = 'default') {
+    async execute(name, args = {}, ctx = 'default') {
+      const scope = typeof ctx === 'string' ? ctx : ctx.scope || 'default';
+      const owner = typeof ctx === 'string' ? null : ctx.owner || null;
+
       try {
-        return await runTool(name, args, scope);
+        return await runTool(name, args, scope, owner);
       } catch (err) {
         return { ok: false, summary: err.message || 'falha na ferramenta', output: '' };
       }
     },
   };
 
-  async function runTool(name, args, scope) {
+  async function runTool(name, args, scope, owner) {
     switch (name) {
       case 'list_files': {
         const files = await walk(root, root, [], { ignore: extraIgnore });
@@ -235,7 +279,7 @@ export function createTools(root, tmpDir, options = {}) {
 
       case 'write_file': {
         // Argumentos vazios quase sempre significam resposta truncada pelo
-        // limite de saÃ­da. Explicar isso Ã© melhor que sÃ³ dizer "caminho vazio".
+        // limite de saída. Explicar isso é melhor que só dizer "caminho vazio".
         if (!args.path || typeof args.path !== 'string') {
           return {
             ok: false,
@@ -259,6 +303,23 @@ export function createTools(root, tmpDir, options = {}) {
         const content = args.content;
         if (content.length > MAX_FILE_BYTES) {
           return { ok: false, summary: 'conteudo grande demais', output: '' };
+        }
+
+        // Conflito entre instâncias: outra instância já é dona deste arquivo.
+        // Deixar escrever apagaria o trabalho dela em silêncio.
+        const rel = path.relative(root, full).split(path.sep).join('/');
+        if (writeGuard && owner) {
+          const claim = writeGuard.claim(rel, owner);
+          if (!claim.ok) {
+            return {
+              ok: false,
+              summary: `arquivo em uso por ${claim.owner}`,
+              output:
+                `${rel} ja esta sendo alterado por ${claim.owner} nesta execucao. ` +
+                'NAO escreva neste arquivo: escolha outro ou peça a tarefa para o dono dele. ' +
+                'Sobrescrever apagaria o trabalho do outro agente.',
+            };
+          }
         }
 
         await mkdir(path.dirname(full), { recursive: true });
@@ -303,7 +364,7 @@ export function createTools(root, tmpDir, options = {}) {
       if (nodeTests) return nodeTests;
     }
 
-    // 3. Script "test" do package.json â€” cobre projetos que usam npm test.
+    // 3. Script "test" do package.json — cobre projetos que usam npm test.
     const fromPackage = await runPackageScript();
     if (fromPackage) return fromPackage;
 
@@ -388,7 +449,7 @@ export function createTools(root, tmpDir, options = {}) {
   /**
    * Usa o script "test" do package.json.
    * Sem isso, um projeto como o agent-town (que testa via npm test) ficaria
-   * sem nenhuma forma de validaÃ§Ã£o â€” e o agente nÃ£o teria como saber se acertou.
+   * sem nenhuma forma de validação — e o agente não teria como saber se acertou.
    */
   async function runPackageScript() {
     const pkgPath = path.join(root, 'package.json');
@@ -406,7 +467,7 @@ export function createTools(root, tmpDir, options = {}) {
 
     const logPath = path.join(tmpDir, `test-${Date.now()}.log`);
 
-    // Node 20+ recusa spawn() direto de .cmd/.bat (CVE-2024-27980), entÃ£o
+    // Node 20+ recusa spawn() direto de .cmd/.bat (CVE-2024-27980), então
     // passamos pelo shell do sistema em vez de chamar "npm.cmd".
     const isWin = process.platform === 'win32';
     const result = await runProcess({

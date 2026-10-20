@@ -97,8 +97,9 @@ export function loadConfig() {
 
   const host = envString('HOST', '127.0.0.1');
   const projectRoots = parseRoots(envString('PROJECT_ROOTS', ''));
+  const agentsPerRole = envNumber('AGENTS_PER_ROLE', 2, { min: 1, max: 3 });
 
-  return {
+  const base = {
     mode: envString('ORCHESTRATOR', 'sim').toLowerCase(),
     providers,
     roles,
@@ -112,6 +113,7 @@ export function loadConfig() {
       budgetUsd: envNumber('BUDGET_USD', 0.5, { min: 0, max: 100 }),
       maxTokens: envNumber('MAX_TOKENS', 200000, { min: 0, max: 5_000_000 }),
       timeoutSec: envNumber('TIMEOUT_SEC', 600, { min: 10, max: 3600 }),
+      agentsPerRole,
     },
     projectRoots,
     // Servidor local: só esta máquina alcança a API, então você escolhe
@@ -119,6 +121,65 @@ export function loadConfig() {
     allowAnyPath: isLoopback(host),
     server: { port: envNumber('PORT', 4173, { min: 1, max: 65535 }), host },
   };
+
+  base.agents = buildAgentInstances(base.roles, agentsPerRole);
+  return base;
+}
+
+/**
+ * Cria as instâncias de agente.
+ *
+ * O Planner é único (é o orquestrador, não faz sentido ter dois decidindo).
+ * Cada papel executor ganha N instâncias: "coder-1", "coder-2", etc. Elas
+ * compartilham o modelo e o semáforo do provedor, mas rodam conversas
+ * separadas — é isso que permite duas tarefas de código ao mesmo tempo.
+ *
+ * @param {object} roles mapa id -> definição do papel
+ * @param {number} perRole quantas instâncias por papel executor
+ */
+export function buildAgentInstances(roles, perRole = 2) {
+  const instances = [];
+  const planner = roles.planner;
+
+  if (planner) {
+    instances.push({
+      id: 'planner',
+      role: 'planner',
+      name: planner.name,
+      roleName: planner.role,
+      index: 0,
+      modelRef: planner.modelRef,
+    });
+  }
+
+  for (const role of Object.values(roles)) {
+    if (role.id === 'planner') continue;
+    for (let i = 0; i < perRole; i++) {
+      // Com uma instância só, o id fica limpo ("coder") — sem sufixo inútil.
+      const id = perRole > 1 ? `${role.id}-${i + 1}` : role.id;
+      instances.push({
+        id,
+        role: role.id,
+        name: perRole > 1 ? `${role.name} ${i + 1}` : role.name,
+        roleName: role.role,
+        index: i,
+        modelRef: role.modelRef,
+      });
+    }
+  }
+
+  return instances;
+}
+
+/** Ids aceitos numa tarefa do plano: a instância específica ou o papel genérico. */
+export function executorIds(agents) {
+  const ids = new Set();
+  for (const a of agents) {
+    if (a.role === 'planner') continue;
+    ids.add(a.id);
+    ids.add(a.role); // "coder" = qualquer instância disponível
+  }
+  return [...ids];
 }
 
 /** O host só é alcançável desta máquina? */

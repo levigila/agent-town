@@ -12,8 +12,14 @@ export function createProvider(providerConfig, model) {
 }
 
 /**
- * Cria um provider por papel, compartilhando um semáforo por provedor.
- * Assim os 4 agentes nunca passam do limite de concorrência da API.
+ * Cria um provider por papel E por instância, compartilhando um semáforo
+ * por provedor.
+ *
+ * O semáforo é o ponto crítico: ter 6 agentes não adianta se o plano da API
+ * só permite 2 requisições simultâneas. As instâncias se revezam na fila.
+ *
+ * @param {object} config
+ * @returns {{byRole: object, byInstance: object, limiters: object}}
  */
 export function createProvidersForRoles(config) {
   const limiters = {};
@@ -22,23 +28,50 @@ export function createProvidersForRoles(config) {
   }
 
   const byRole = {};
-  for (const [roleId, role] of Object.entries(config.roles)) {
-    const ref = role.modelRef;
-    if (!ref) continue;
+
+  const makeProvider = (roleId, roleName, ref) => {
     const providerConfig = config.providers[ref.providerKey];
-    if (!providerConfig) continue;
+    if (!providerConfig) return null;
 
     const provider = createProvider(providerConfig, ref.model);
-    byRole[roleId] = {
+    return {
       ...provider,
       role: roleId,
-      roleName: role.name,
+      roleName,
       limiter: limiters[ref.providerKey],
       get label() {
         return `${providerConfig.label} · ${ref.model}`;
       },
     };
+  };
+
+  for (const [roleId, role] of Object.entries(config.roles)) {
+    const ref = role.modelRef;
+    if (!ref) continue;
+    const provider = makeProvider(roleId, role.name, ref);
+    if (provider) byRole[roleId] = provider;
   }
 
-  return { byRole, limiters };
+  // Uma instância por agente (coder-1, coder-2...). Reaproveita o provider do
+  // papel: mesma configuração e mesmo semáforo, mas cada agente roda a sua
+  // própria conversa — o estado fica nas mensagens, não no provider.
+  //
+  // Agentes vindos do OpenCode não têm papel interno: eles trazem o próprio
+  // modelRef, então criamos um provider novo (mas com o mesmo semáforo).
+  const byInstance = {};
+  for (const agent of config.agents || []) {
+    const reuse = byRole[agent.role];
+    if (reuse) {
+      byInstance[agent.id] = reuse;
+      continue;
+    }
+
+    const ref = agent.modelRef;
+    if (!ref) continue;
+
+    const provider = makeProvider(agent.id, agent.name || agent.id, ref);
+    if (provider) byInstance[agent.id] = provider;
+  }
+
+  return { byRole, byInstance, limiters };
 }

@@ -1,26 +1,27 @@
 // Orquestrador real: chama as APIs e emite os mesmos eventos que o simulador.
 //
-// Arquitetura em trÃªs camadas:
+// Arquitetura em três camadas:
 //
-//   1. PLANEJAMENTO â€” o Planner recebe o objetivo e devolve um grafo de tarefas
+//   1. PLANEJAMENTO — o Planner recebe o objetivo e devolve um grafo de tarefas
 //      (JSON validado em src/graph.mjs). Se falhar duas vezes, cai no pipeline
 //      fixo. A ferramenta nunca quebra por causa do Planner.
 //
-//   2. EXECUÃ‡ÃƒO â€” o grafo Ã© ordenado em ondas (src/graph.mjs). Cada onda roda
-//      em paralelo; o semÃ¡foro do provedor respeita o limite de concorrÃªncia.
+//   2. EXECUÇÃO — o grafo é ordenado em ondas (src/graph.mjs). Cada onda roda
+//      em paralelo; o semáforo do provedor respeita o limite de concorrência.
 //      O resultado de uma tarefa alimenta as tarefas que dependem dela.
 //
-//   3. ISOLAMENTO â€” em modo projeto, tudo acontece numa branch git prÃ³pria
-//      (src/git.mjs). Nunca push. Diff sempre disponÃ­vel para revisÃ£o.
+//   3. ISOLAMENTO — em modo projeto, tudo acontece numa branch git própria
+//      (src/git.mjs). Nunca push. Diff sempre disponível para revisão.
 //
-// O frontend nÃ£o muda entre modo simulado e real.
+// O frontend não muda entre modo simulado e real.
 
 import { createProvidersForRoles } from './providers/index.mjs';
-import { createTools, TOOL_DEFS } from './tools.mjs';
+import { createTools, TOOL_DEFS, createWriteGuard } from './tools.mjs';
 import { seedWorkspace, runsDir } from './workspace.mjs';
 import { loadPricing, costOf } from './pricing.mjs';
 import { planTask, fallbackPlan, PLANNER_SYSTEM } from './planner.mjs';
 import { topoWaves } from './graph.mjs';
+import { executorIds, parseModelRef, buildAgentInstances } from './config.mjs';
 import {
   prepareWorkBranch,
   cleanupBranch,
@@ -94,7 +95,11 @@ export class Orchestrator {
     this.error = null;
     this.plan = null;
     this.project = null;
+    this.rateLimit = null;
     this._scopeSeq = 0;
+    // Compartilhada por todas as instancias: impede que dois agentes
+    // sobrescrevam o mesmo arquivo sem perceber.
+    this._writeGuard = createWriteGuard();
   }
 
   getState() {
@@ -109,6 +114,7 @@ export class Orchestrator {
       error: this.error,
       plan: this.plan,
       project: this.project,
+      rateLimit: this.rateLimit || null,
     };
   }
 
@@ -127,7 +133,7 @@ export class Orchestrator {
 
   /**
    * @param {object} options
-   * @param {string} [options.task] objetivo escrito pelo usuÃ¡rio
+   * @param {string} [options.task] objetivo escrito pelo usuário
    * @param {'template'|'project'} [options.mode]
    * @param {string} [options.projectPath]
    * @param {string} [options.template]
@@ -166,9 +172,10 @@ export class Orchestrator {
     return this.getState();
   }
 
-  // -- emissÃ£o ---------------------------------------------------------------
+  // -- emissão ---------------------------------------------------------------
 
   _emit(type, agentId = null, payload = {}) {
+    if (type === 'rate_limit') this.rateLimit = payload;
     this.emitRaw({ id: nextId(), ts: Date.now(), type, agentId, runId: this.runId, ...payload });
   }
 
@@ -207,11 +214,63 @@ export class Orchestrator {
     if (!this.running || this.controller?.signal.aborted) throw new Aborted('execucao interrompida');
   }
 
-  // -- execuÃ§Ã£o --------------------------------------------------------------
+  /**
+   * Garante que exista a lista de instâncias.
+   *
+   * Configurações antigas (e testes) montam só `roles`. Nesse caso derivamos
+   * uma instância por papel — o comportamento clássico, sem paralelismo extra.
+   */
+  _ensureAgents() {
+    if (Array.isArray(this.config.agents) && this.config.agents.length) return;
+
+    const perRole = this.config.limits?.agentsPerRole || 1;
+    this.config.agents = buildAgentInstances(this.config.roles || {}, perRole);
+  }
+
+  /**
+   * Adiciona agentes do OpenCode à execução.
+   *
+   * Eles vêm no corpo do /api/run como `extraAgents` — já convertidos por
+   * src/opencode.mjs (id, prompt, toolNames, modelRef). O Planner passa a
+   * vê-los como opção, e o escalonador os trata como qualquer instância.
+   */
+  _registerExtraAgents() {
+    this._ensureAgents();
+
+    const extras = Array.isArray(this.request.extraAgents) ? this.request.extraAgents : [];
+    if (!extras.length) return;
+
+    const fallbackModel = this.config.roles?.coder?.modelRef || this.config.roles?.planner?.modelRef;
+
+    for (const extra of extras) {
+      if (!extra?.id || !extra?.prompt) continue;
+      if ((this.config.agents || []).some((a) => a.id === extra.id)) continue;
+
+      this.config.agents.push({
+        id: extra.id,
+        role: extra.id, // papel próprio: não herda provider interno
+        name: extra.name || extra.id,
+        roleName: extra.mode === 'primary' ? 'OpenCode' : 'OpenCode (subagente)',
+        index: 0,
+        prompt: extra.prompt,
+        toolNames: Array.isArray(extra.toolNames) ? extra.toolNames : null,
+        modelRef: parseModelRef(extra.model || '') || fallbackModel,
+        source: 'opencode',
+      });
+    }
+  }
+
+  // -- execução --------------------------------------------------------------
 
   async _run() {
-    const { byRole, limiters } = this.providerFactory(this.config);
+    // Agentes extras (OpenCode) entram como instâncias antes de montar os
+    // provedores, para já terem modelRef e semáforo resolvidos.
+    this._registerExtraAgents();
+
+    const { byRole, byInstance, limiters } = this.providerFactory(this.config);
     this.limiters = limiters;
+    this._byRole = byRole;
+    this._byInstance = byInstance || byRole;
 
     const runId = this.runId;
     const mode = this.request.mode;
@@ -221,9 +280,12 @@ export class Orchestrator {
       cycle: 1,
       mode,
     });
-    for (const id of AGENT_IDS) this._emit('agent_spawned', id, { cycle: 1 });
 
-    // --- preparaÃ§Ã£o do ambiente ---------------------------------------------
+    // Uma instância por agente: planner, researcher-1/2, coder-1/2, reviewer-1/2.
+    const agentIds = (this.config.agents || []).map((a) => a.id);
+    for (const id of agentIds.length ? agentIds : AGENT_IDS) this._emit('agent_spawned', id, { cycle: 1 });
+
+    // --- preparação do ambiente ---------------------------------------------
     const env = mode === 'project' ? await this._prepareProject(runId) : await this._prepareTemplate(runId);
 
     if (!env.ok) {
@@ -262,7 +324,7 @@ export class Orchestrator {
     }
   }
 
-  // -- preparaÃ§Ã£o: template --------------------------------------------------
+  // -- preparação: template --------------------------------------------------
 
   async _prepareTemplate(runId) {
     const { workspace, tmpDir } = await seedWorkspace(runId, this.request.template);
@@ -274,7 +336,7 @@ export class Orchestrator {
       /* template sem SPEC */
     }
 
-    const tools = createTools(workspace, tmpDir);
+    const tools = createTools(workspace, tmpDir, { writeGuard: this._writeGuard });
 
     return {
       ok: true,
@@ -287,7 +349,7 @@ export class Orchestrator {
     };
   }
 
-  // -- preparaÃ§Ã£o: projeto real ---------------------------------------------
+  // -- preparação: projeto real ---------------------------------------------
 
   async _prepareProject(runId) {
     const allowed = this.config.projectRoots || [];
@@ -326,7 +388,7 @@ export class Orchestrator {
 
     this._emit('agent_message', 'planner', {
       to: 'researcher',
-      text: `Projeto: ${path.basename(resolved.path)} Â· branch ${branchInfo.branch}`,
+      text: `Projeto: ${path.basename(resolved.path)} · branch ${branchInfo.branch}`,
     });
 
     const context = [
@@ -352,7 +414,7 @@ export class Orchestrator {
     };
   }
 
-  // -- execuÃ§Ã£o do plano -----------------------------------------------------
+  // -- execução do plano -----------------------------------------------------
 
   async _execute(byRole, env) {
     // --- 1. planejamento ----------------------------------------------------
@@ -363,8 +425,11 @@ export class Orchestrator {
       task: env.task,
       context: env.context,
       maxTasks: this.config.limits.maxTasks,
+      agents: this.config.agents,
+      allowedAgents: executorIds(this.config.agents || []),
       signal: this.controller?.signal,
       onNote: (msg) => this._emit('agent_thinking', 'planner', { text: msg }),
+      onRateLimit: (info) => this._emit('rate_limit', null, info),
     });
 
     if (plan.usage) this._usage('planner', byRole.planner.model, plan.usage);
@@ -404,109 +469,51 @@ export class Orchestrator {
       summary: fellBack ? 'fallback: pipeline padrao' : `${tasks.length} tarefas planejadas`,
     });
 
-    // --- 2. execuÃ§Ã£o em ondas ----------------------------------------------
+    // --- 2. execução em ondas ----------------------------------------------
     const results = {};
     let reviewerVerdict = null;
+
+    // Instâncias ocupadas nesta onda. As tarefas do plano podem pedir uma
+    // instância específica ("coder-1") ou só o papel ("coder") — neste caso
+    // o escalonador escolhe quem estiver livre.
+    const busy = new Set();
 
     for (let w = 0; w < waves.length; w++) {
       this._checkAbort();
       const wave = waves[w];
-      const self = this;
 
       this._emit('run_started', null, { label: `Onda ${w + 1}/${waves.length}`, cycle: w + 1, silent: true });
 
-      // Duas tarefas do MESMO agente na mesma onda releem os mesmos arquivos e
-      // desperdicam o orÃ§amento. Serializamos por agente, mantendo o
-      // paralelismo apenas entre agentes diferentes.
+      // Resolve cada tarefa para uma instância concreta ANTES de rodar, para
+      // que duas tarefas genéricas ("coder") não caiam no mesmo agente.
+      const assignments = wave.map((task) => ({ task, agentId: this._assign(task, busy) }));
+
+      // Agrupa por instância: instâncias diferentes rodam em paralelo;
+      // tarefas da mesma instância rodam em série (uma conversa por vez).
       const byAgent = new Map();
-      for (const task of wave) {
-        if (!byAgent.has(task.agent)) byAgent.set(task.agent, []);
-        byAgent.get(task.agent).push(task);
+      for (const item of assignments) {
+        if (!byAgent.has(item.agentId)) byAgent.set(item.agentId, []);
+        byAgent.get(item.agentId).push(item);
       }
 
-      const runOne = async (task) => {
-        {
-          self._checkAbort();
-
-          // dependÃªncia que falhou bloqueia a tarefa
-          const blocked = task.dependsOn.filter((d) => results[d] && results[d].ok === false);
-          if (blocked.length) {
-            results[task.id] = { ok: false, blocked: true, text: 'bloqueada por dependencia' };
-            self._emit('agent_error', task.agent, {
-              text: `tarefa ${task.id} bloqueada por: ${blocked.join(', ')}`,
-            });
-            return;
-          }
-
-          const provider = byRole[task.agent];
-          if (!provider) {
-            results[task.id] = { ok: false, text: `sem provedor para ${task.agent}` };
-            self._emit('agent_error', task.agent, { text: `sem provedor para ${task.agent}` });
-            return;
-          }
-
-          self._handoff('planner', task.agent, task.instruction, task.id);
-
-          const context = task.dependsOn
-            .map((d) => (results[d] ? `[${d}]\n${results[d].text}` : ''))
-            .filter(Boolean)
-            .join('\n\n')
-            .slice(0, MAX_DEP_CONTEXT);
-
-          const prompt = [
-            `Objetivo geral:\n${env.task}`,
-            `\nSua tarefa (${task.id}):\n${task.instruction}`,
-            context ? `\nResultado das tarefas anteriores:\n${context}` : '',
-            `\nContexto do projeto:\n${env.context}`,
-          ]
-            .filter(Boolean)
-            .join('\n');
-
-          const toolNames = task.agent === 'researcher' ? READ_ONLY : ALL_TOOLS;
-
-          try {
-            const out = await self._agent({
-              roleId: task.agent,
-              provider,
-              system: PROMPTS[task.agent],
-              task: prompt,
-              toolNames,
-              maxSteps: self.config.limits.maxSteps,
-            });
-
-            results[task.id] = {
-              ...out,
-              ok: task.agent === 'reviewer' ? !/VEREDITO:\s*REPROVADO/i.test(out.text || '') : out.testsPassed !== false,
-            };
-
-            if (task.agent === 'reviewer') {
-              reviewerVerdict = results[task.id].ok ? 'aprovado' : 'reprovado';
-            }
-
-            self._emit('agent_done', task.agent, {
-              summary: self._summaryFor(task, out),
-              taskId: task.id,
-            });
-          } catch (err) {
-            if (err instanceof Aborted || err instanceof BudgetExceeded) throw err;
-            results[task.id] = { ok: false, text: err.message };
-            self._emit('agent_error', task.agent, { text: `${task.id}: ${err.message}` });
-          }
-        }
-      };
-
       await Promise.all(
-        [...byAgent.values()].map(async (group) => {
-          for (const task of group) {
-            await runOne(task);
+        [...byAgent.entries()].map(async ([agentId, items]) => {
+          for (const { task } of items) {
+            await this._runTask({ task, agentId, results, env });
           }
         }),
       );
+
+      // libera as instâncias para a próxima onda
+      for (const item of assignments) busy.delete(item.agentId);
+
+      if (results.__verdict) reviewerVerdict = results.__verdict;
     }
 
     // --- 3. encerramento ----------------------------------------------------
-    const failed = Object.entries(results).filter(([, r]) => !r.ok);
-    const unverified = Object.entries(results)
+    const done = Object.entries(results).filter(([id]) => !id.startsWith('__'));
+    const failed = done.filter(([, r]) => !r.ok);
+    const unverified = done
       .filter(([, r]) => r.ok && r.testsPassed === null && typeof r.testsPassed !== 'undefined')
       .map(([id]) => id);
 
@@ -522,11 +529,118 @@ export class Orchestrator {
     });
   }
 
-  _summaryFor(task, out) {
-    if (task.agent === 'reviewer') {
+  /**
+   * Escolhe a instância que vai executar a tarefa.
+   *
+   * Em ordem:
+   *   1. A tarefa pediu uma instância específica ("coder-2") -> usa ela.
+   *   2. Pediu o papel ("coder") -> pega a instância do papel que está livre.
+   *   3. Todas ocupadas -> usa a primeira; o agrupamento posterior serializa.
+   */
+  _assign(task, busy) {
+    const instances = (this.config.agents || []).filter((a) => a.id !== 'planner');
+
+    const exact = instances.find((a) => a.id === task.agent);
+    if (exact) {
+      busy.add(exact.id);
+      return exact.id;
+    }
+
+    const sameRole = instances.filter((a) => a.role === task.agent);
+    const chosen = sameRole.find((a) => !busy.has(a.id)) || sameRole[0];
+
+    if (!chosen) return task.agent; // papel desconhecido: deixa o erro aparecer
+    busy.add(chosen.id);
+    return chosen.id;
+  }
+
+  /** Roda uma tarefa com a instância indicada. */
+  async _runTask({ task, agentId, results, env }) {
+    const agent = (this.config.agents || []).find((a) => a.id === agentId);
+    const role = agent?.role || task.agent;
+
+    this._checkAbort();
+
+    // dependência que falhou bloqueia a tarefa
+    const blocked = task.dependsOn.filter((d) => results[d] && results[d].ok === false);
+    if (blocked.length) {
+      results[task.id] = { ok: false, blocked: true, text: 'bloqueada por dependencia' };
+      this._emit('agent_error', agentId, {
+        text: `tarefa ${task.id} bloqueada por: ${blocked.join(', ')}`,
+      });
+      return;
+    }
+
+    // Provider da instância; se ela não tiver um próprio (ou vier de uma
+    // configuração antiga), cai no provider do papel.
+    const provider = this._byInstance?.[agentId] || this._byRole?.[role];
+    if (!provider) {
+      results[task.id] = { ok: false, text: `sem provedor para ${agentId}` };
+      this._emit('agent_error', agentId, { text: `sem provedor para ${agentId}` });
+      return;
+    }
+
+    this._handoff('planner', agentId, task.instruction, task.id);
+
+    const context = task.dependsOn
+      .map((d) => (results[d] ? `[${d}]\n${results[d].text}` : ''))
+      .filter(Boolean)
+      .join('\n\n')
+      .slice(0, MAX_DEP_CONTEXT);
+
+    const siblings = (this.config.agents || [])
+      .filter((a) => a.role === role && a.id !== agentId)
+      .map((a) => a.id);
+
+    const prompt = [
+      `Objetivo geral:\n${env.task}`,
+      `\nSua tarefa (${task.id}):\n${task.instruction}`,
+      context ? `\nResultado das tarefas anteriores:\n${context}` : '',
+      siblings.length
+        ? `\nOutros agentes com a sua funcao: ${siblings.join(', ')}. Nao altere arquivos que nao sejam seus.`
+        : '',
+      `\nContexto do projeto:\n${env.context}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const toolNames = agent?.toolNames || (role === 'researcher' ? READ_ONLY : ALL_TOOLS);
+
+    try {
+      const out = await this._agent({
+        roleId: agentId,
+        provider,
+        system: agent?.prompt || PROMPTS[role],
+        task: prompt,
+        toolNames,
+        maxSteps: this.config.limits.maxSteps,
+      });
+
+      results[task.id] = {
+        ...out,
+        ok: role === 'reviewer' ? !/VEREDITO:\s*REPROVADO/i.test(out.text || '') : out.testsPassed !== false,
+      };
+
+      if (role === 'reviewer') {
+        results.__verdict = results[task.id].ok ? 'aprovado' : 'reprovado';
+      }
+
+      this._emit('agent_done', agentId, {
+        summary: this._summaryFor(role, out),
+        taskId: task.id,
+      });
+    } catch (err) {
+      if (err instanceof Aborted || err instanceof BudgetExceeded) throw err;
+      results[task.id] = { ok: false, text: err.message };
+      this._emit('agent_error', agentId, { text: `${task.id}: ${err.message}` });
+    }
+  }
+
+  _summaryFor(role, out) {
+    if (role === 'reviewer') {
       return /VEREDITO:\s*APROVADO/i.test(out.text || '') ? 'aprovado' : 'revisado';
     }
-    if (task.agent === 'coder') {
+    if (role === 'coder') {
       if (out.testsPassed === true) return 'implementado, testes passando';
       if (out.testsPassed === false) return 'implementado, TESTES FALHANDO';
       return 'implementado (nao verificado por testes)';
@@ -534,7 +648,7 @@ export class Orchestrator {
     return 'concluido';
   }
 
-  // -- finalizaÃ§Ã£o -----------------------------------------------------------
+  // -- finalização -----------------------------------------------------------
 
   async _finalize(env) {
     if (!env || env.kind !== 'project') return;
@@ -620,6 +734,9 @@ export class Orchestrator {
           maxTokens: this.config.limits.maxOutputTokens || 8192,
           signal: this.controller?.signal,
           onRetry: (msg) => this._emit('agent_thinking', roleId, { text: msg }),
+          // Consumo real de uma chave de plano: requisições na janela, não
+          // tokens. Repassamos para a UI, que mostra o saldo do limite.
+          onRateLimit: (info) => this._emit('rate_limit', null, info),
         }),
       );
 
@@ -659,7 +776,7 @@ export class Orchestrator {
 
         let outcome;
         try {
-          outcome = await this._tools.execute(call.name, call.args, scope);
+          outcome = await this._tools.execute(call.name, call.args, { scope, owner: roleId });
         } catch (err) {
           outcome = { ok: false, summary: err.message, output: '' };
         }
@@ -693,11 +810,11 @@ export class Orchestrator {
   }
 
   /**
-   * Lembrete de orÃ§amento no topo da tarefa.
+   * Lembrete de orçamento no topo da tarefa.
    *
    * Sem isso os agentes leem 10 arquivos, releem os mesmos, e o teto de tokens
-   * acaba antes de escreverem qualquer coisa â€” foi exatamente o que aconteceu
-   * na primeira execuÃ§Ã£o real.
+   * acaba antes de escreverem qualquer coisa — foi exatamente o que aconteceu
+   * na primeira execução real.
    */
   _withBudgetNote(task, maxSteps) {
     const remaining = this.config.limits.maxTokens

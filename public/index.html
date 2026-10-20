@@ -25,6 +25,7 @@
       <div class="controls">
         <span class="mode-badge" id="modeBadge">simulado</span>
         <span class="run-status" id="runStatus">parado</span>
+        <span class="rate-badge" id="rateBadge" hidden title="Requisicoes restantes na janela do provedor"></span>
         <label class="speed">
           <span>velocidade</span>
           <select id="speed">
@@ -117,7 +118,7 @@
           <div class="diff-body" id="diffBody"></div>
         </section>
 
-        <section class="panel">
+        <section class="panel panel-agents">
           <h2 class="panel-title">Agentes</h2>
           <div class="roster" id="roster"></div>
           <p class="panel-note">clique em um card para filtrar o log</p>
