@@ -172,6 +172,36 @@ expect(leftovers.length === 0, `vazou arquivo de log no workspace: ${leftovers.j
   expect(!r.ok, 'npm test com falha deveria retornar ok=false');
 }
 
+// --- write_file: argumentos faltando e modo append ------------------------
+{
+  const noArgs = await tools.execute('write_file', {});
+  expect(!noArgs.ok, 'write_file sem argumentos deveria falhar');
+  expect(
+    String(noArgs.output).includes('cortada') || String(noArgs.summary).includes('path'),
+    `o erro deveria explicar a falta de path/truncamento: ${noArgs.summary} / ${noArgs.output}`,
+  );
+
+  const noContent = await tools.execute('write_file', { path: 'src/partes.txt' });
+  expect(!noContent.ok, 'write_file sem content deveria falhar');
+
+  // cria, depois acrescenta em partes
+  const create = await tools.execute('write_file', { path: 'src/partes.txt', content: 'AAAA\n' });
+  expect(create.ok, 'write_file deveria criar o arquivo');
+
+  const add1 = await tools.execute('write_file', { path: 'src/partes.txt', content: 'BBBB\n', append: true });
+  const add2 = await tools.execute('write_file', { path: 'src/partes.txt', content: 'CCCC\n', append: true });
+  expect(add1.ok && add2.ok, 'append deveria funcionar em sequencia');
+  expect(add1.summary.includes('acrescentado'), `summary deveria indicar append: ${add1.summary}`);
+
+  const full = await readFile(path.join(root, 'src', 'partes.txt'), 'utf8');
+  expect(full === 'AAAA\nBBBB\nCCCC\n', `append deveria concatenar na ordem: ${JSON.stringify(full)}`);
+
+  // sem append, substitui
+  await tools.execute('write_file', { path: 'src/partes.txt', content: 'NOVO\n' });
+  const replaced = await readFile(path.join(root, 'src', 'partes.txt'), 'utf8');
+  expect(replaced === 'NOVO\n', 'sem append deveria substituir o conteudo');
+}
+
 await rm(dir, { recursive: true, force: true });
 
 if (problems.length) {

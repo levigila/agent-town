@@ -105,6 +105,10 @@ export function loadConfig() {
     limits: {
       maxSteps: envNumber('MAX_STEPS', 10, { min: 1, max: 40 }),
       maxTasks: envNumber('MAX_TASKS', 6, { min: 1, max: 12 }),
+      // Teto de SAÍDA por chamada. Precisa caber um arquivo inteiro dentro do
+      // JSON do write_file — com 2048 o modelo era truncado no meio dos
+      // argumentos e a escrita saía com caminho vazio.
+      maxOutputTokens: envNumber('MAX_OUTPUT_TOKENS', 8192, { min: 512, max: 32768 }),
       budgetUsd: envNumber('BUDGET_USD', 0.5, { min: 0, max: 100 }),
       maxTokens: envNumber('MAX_TOKENS', 200000, { min: 0, max: 5_000_000 }),
       timeoutSec: envNumber('TIMEOUT_SEC', 600, { min: 10, max: 3600 }),

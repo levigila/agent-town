@@ -617,13 +617,31 @@ export class Orchestrator {
           messages,
           tools,
           temperature: 0.2,
-          maxTokens: 2048,
+          maxTokens: this.config.limits.maxOutputTokens || 8192,
           signal: this.controller?.signal,
           onRetry: (msg) => this._emit('agent_thinking', roleId, { text: msg }),
         }),
       );
 
       this._usage(roleId, provider.model, res.usage);
+
+      // Resposta cortada no limite de saída: os argumentos da ferramenta vêm
+      // incompletos (JSON truncado => args vazios). Avisar é essencial, senão
+      // o agente acha que escreveu e segue em frente.
+      if (res.finishReason === 'length') {
+        this._emit('agent_thinking', roleId, {
+          text: 'resposta truncada no limite de saida — envie o arquivo em partes',
+        });
+        messages.push({
+          role: 'user',
+          content:
+            'Sua resposta anterior foi cortada pelo limite de tokens de saida, entao os argumentos ' +
+            'da ferramenta chegaram incompletos. Para arquivos grandes, use write_file com ' +
+            '"append": true em varias chamadas: a primeira sem append (cria/limpa) e as seguintes ' +
+            'com append:true, cada uma com um trecho menor.',
+        });
+        continue;
+      }
 
       if (res.text) {
         lastText = res.text;

@@ -1,9 +1,9 @@
-// Ferramentas que os agentes podem executar.
+﻿// Ferramentas que os agentes podem executar.
 //
-// SEGURANÇA: tudo fica preso ao diretório do workspace da execução.
+// SEGURANÃ‡A: tudo fica preso ao diretÃ³rio do workspace da execuÃ§Ã£o.
 // Nenhum caminho pode escapar dele (nem com .., nem com absoluto).
 
-import { readFile, writeFile, readdir, mkdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, appendFile, readdir, mkdir, stat } from 'node:fs/promises';
 import { existsSync, openSync, closeSync, readFileSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -30,12 +30,18 @@ export const TOOL_DEFS = [
   },
   {
     name: 'write_file',
-    description: 'Escreve (ou substitui) um arquivo de texto. Envie o conteudo completo.',
+    description:
+      'Escreve (ou substitui) um arquivo de texto. Envie o conteudo completo. ' +
+      'Para arquivos grandes, use "append": true em chamadas sucessivas para nao estourar o limite de saida.',
     parameters: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'Caminho relativo, ex: src/price.mjs' },
-        content: { type: 'string', description: 'Conteudo completo do arquivo' },
+        content: { type: 'string', description: 'Conteudo do arquivo (ou o trecho, quando append=true)' },
+        append: {
+          type: 'boolean',
+          description: 'Se true, acrescenta ao final em vez de substituir. Use na 2a chamada em diante.',
+        },
       },
       required: ['path', 'content'],
     },
@@ -52,8 +58,8 @@ export function safeResolve(root, rel) {
   const raw = String(rel ?? '').trim();
   if (!raw) throw new Error('caminho vazio');
 
-  // Caminho absoluto é recusado de frente: o contrato da ferramenta é
-  // "relativo à raiz". Remapear silenciosamente confundiria o agente.
+  // Caminho absoluto Ã© recusado de frente: o contrato da ferramenta Ã©
+  // "relativo Ã  raiz". Remapear silenciosamente confundiria o agente.
   if (path.isAbsolute(raw) || /^[a-zA-Z]:/.test(raw) || raw.startsWith('\\\\')) {
     throw new Error(`caminho absoluto nao permitido: ${rel}`);
   }
@@ -122,7 +128,7 @@ function runProcess({ command, args, cwd, timeoutMs = 60000, logPath }) {
       try {
         closeSync(fd);
       } catch {
-        /* já fechado */
+        /* jÃ¡ fechado */
       }
       let output = '';
       try {
@@ -137,7 +143,7 @@ function runProcess({ command, args, cwd, timeoutMs = 60000, logPath }) {
       try {
         child?.kill('SIGKILL');
       } catch {
-        /* já morreu */
+        /* jÃ¡ morreu */
       }
       finish(-1, `\n[timeout de ${timeoutMs}ms]`);
     }, timeoutMs);
@@ -159,32 +165,32 @@ function runProcess({ command, args, cwd, timeoutMs = 60000, logPath }) {
 }
 
 /**
- * @param {string} root diretório onde os agentes podem atuar
- * @param {string} tmpDir diretório para logs (fora do root)
+ * @param {string} root diretÃ³rio onde os agentes podem atuar
+ * @param {string} tmpDir diretÃ³rio para logs (fora do root)
  * @param {object} [options]
  * @param {string[]|null} [options.testCommand] comando de teste do projeto
  * @param {number} [options.testTimeoutMs] timeout do comando de teste
- * @param {string[]} [options.ignore] padrões extras a esconder do list_files
+ * @param {string[]} [options.ignore] padrÃµes extras a esconder do list_files
  */
 export function createTools(root, tmpDir, options = {}) {
   const testCommand = Array.isArray(options.testCommand) ? options.testCommand : null;
   const testTimeoutMs = Number(options.testTimeoutMs) > 0 ? Number(options.testTimeoutMs) : 180000;
   const extraIgnore = Array.isArray(options.ignore) ? options.ignore : [];
 
-  // Arquivos já lidos, POR CONVERSA. Releitura devolve um aviso curto em vez
-  // do conteúdo inteiro: o modelo esquece o que leu e relê, e cada releitura
+  // Arquivos jÃ¡ lidos, POR CONVERSA. Releitura devolve um aviso curto em vez
+  // do conteÃºdo inteiro: o modelo esquece o que leu e relÃª, e cada releitura
   // custa o arquivo inteiro em tokens de novo.
   //
   // A chave inclui o escopo (um por agente/tarefa). Sem isso, o agente B
-  // receberia "já lido" de um arquivo que só o agente A viu — e ficaria cego.
+  // receberia "jÃ¡ lido" de um arquivo que sÃ³ o agente A viu â€” e ficaria cego.
   const reads = new Set();
 
   return {
     root,
 
     /**
-     * Executa uma ferramenta. NUNCA lança: sempre devolve
-     * { ok, summary, output } — inclusive para caminho inválido.
+     * Executa uma ferramenta. NUNCA lanÃ§a: sempre devolve
+     * { ok, summary, output } â€” inclusive para caminho invÃ¡lido.
      *
      * @param {string} name
      * @param {object} args
@@ -228,13 +234,46 @@ export function createTools(root, tmpDir, options = {}) {
       }
 
       case 'write_file': {
+        // Argumentos vazios quase sempre significam resposta truncada pelo
+        // limite de saÃ­da. Explicar isso Ã© melhor que sÃ³ dizer "caminho vazio".
+        if (!args.path || typeof args.path !== 'string') {
+          return {
+            ok: false,
+            summary: 'faltou o parametro "path"',
+            output:
+              'write_file precisa de "path" e "content". Se voce enviou os dois, sua resposta ' +
+              'provavelmente foi cortada pelo limite de tokens de saida: reenvie o arquivo em ' +
+              'trechos menores usando append:true a partir da segunda chamada.',
+          };
+        }
+
+        if (typeof args.content !== 'string') {
+          return {
+            ok: false,
+            summary: 'faltou o parametro "content"',
+            output: 'write_file precisa de "content" (string com o conteudo). Reenvie a chamada completa.',
+          };
+        }
+
         const full = safeResolve(root, args.path);
-        const content = String(args.content ?? '');
+        const content = args.content;
         if (content.length > MAX_FILE_BYTES) {
           return { ok: false, summary: 'conteudo grande demais', output: '' };
         }
+
         await mkdir(path.dirname(full), { recursive: true });
         const existed = existsSync(full);
+        const isAppend = args.append === true;
+
+        if (isAppend) {
+          await appendFile(full, content, 'utf8');
+          return {
+            ok: true,
+            summary: 'trecho acrescentado',
+            output: `acrescentado a ${args.path} (+${content.length} bytes)`,
+          };
+        }
+
         await writeFile(full, content, 'utf8');
         return {
           ok: true,
@@ -264,7 +303,7 @@ export function createTools(root, tmpDir, options = {}) {
       if (nodeTests) return nodeTests;
     }
 
-    // 3. Script "test" do package.json — cobre projetos que usam npm test.
+    // 3. Script "test" do package.json â€” cobre projetos que usam npm test.
     const fromPackage = await runPackageScript();
     if (fromPackage) return fromPackage;
 
@@ -302,7 +341,7 @@ export function createTools(root, tmpDir, options = {}) {
 
     const passed = result.code === 0;
     const tail = result.output.split('\n').filter(Boolean).slice(-25).join('\n');
-    // O reporter do Node usa "ℹ pass 9"; versoes antigas usam "# pass 9".
+    // O reporter do Node usa "â„¹ pass 9"; versoes antigas usam "# pass 9".
     const count = (label) => {
       const m = result.output.match(new RegExp(`(?:^|[\\s#\\u2139])${label}\\s+(\\d+)`, 'm'));
       return m ? Number(m[1]) : null;
@@ -349,7 +388,7 @@ export function createTools(root, tmpDir, options = {}) {
   /**
    * Usa o script "test" do package.json.
    * Sem isso, um projeto como o agent-town (que testa via npm test) ficaria
-   * sem nenhuma forma de validação — e o agente não teria como saber se acertou.
+   * sem nenhuma forma de validaÃ§Ã£o â€” e o agente nÃ£o teria como saber se acertou.
    */
   async function runPackageScript() {
     const pkgPath = path.join(root, 'package.json');
@@ -367,7 +406,7 @@ export function createTools(root, tmpDir, options = {}) {
 
     const logPath = path.join(tmpDir, `test-${Date.now()}.log`);
 
-    // Node 20+ recusa spawn() direto de .cmd/.bat (CVE-2024-27980), então
+    // Node 20+ recusa spawn() direto de .cmd/.bat (CVE-2024-27980), entÃ£o
     // passamos pelo shell do sistema em vez de chamar "npm.cmd".
     const isWin = process.platform === 'win32';
     const result = await runProcess({
