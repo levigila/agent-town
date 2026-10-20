@@ -1,0 +1,6 @@
+{
+  "_comentario": "Config do agent-town para este proprio repositorio. O npm test completo roda 10 suites (algumas criam repositorios git e rodam o orquestrador inteiro), o que leva ~2 min por chamada. Como coder-1, coder-2 e reviewer-1 rodam testes, isso estourava o TIMEOUT_SEC. Aqui usamos o subconjunto rapido: sintaxe/imports + render + logica pura. Rode 'npm test' voce mesmo antes de aceitar o diff.",
+  "testCommand": ["node", "tool/quick-test.mjs"],
+  "testTimeoutMs": 90000,
+  "maxSteps": 12
+}
