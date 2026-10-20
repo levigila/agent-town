@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>agent-town · observatório de agentes</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b0d12'/%3E%3Crect x='3' y='6' width='10' height='7' fill='%234be0c8'/%3E%3Crect x='5' y='3' width='6' height='4' fill='%23f0c49a'/%3E%3Crect x='6' y='4' width='1' height='1' fill='%2316161f'/%3E%3Crect x='9' y='4' width='1' height='1' fill='%2316161f'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <i></i><i></i><i></i><i></i>
+        </span>
+        <div class="brand-text">
+          <h1>agent-town</h1>
+          <p>observatório de agentes</p>
+        </div>
+      </div>
+
+      <div class="controls">
+        <span class="mode-badge" id="modeBadge">simulado</span>
+        <span class="run-status" id="runStatus">parado</span>
+        <label class="speed">
+          <span>velocidade</span>
+          <select id="speed">
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="4">4x</option>
+            <option value="8">8x</option>
+          </select>
+        </label>
+        <button class="btn btn-primary" id="btnRun">▶ Iniciar</button>
+        <button class="btn" id="btnStop" disabled>■ Parar</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="stage-col">
+        <div class="stage" id="stage">
+          <canvas id="world"></canvas>
+          <canvas id="overlay"></canvas>
+        </div>
+        <p class="stage-hint">
+          clique em um agente para inspecionar · o log mostra cada passo real
+        </p>
+      </section>
+
+      <aside class="sidebar">
+        <section class="panel panel-task">
+          <h2 class="panel-title">Tarefa</h2>
+
+          <textarea
+            id="taskInput"
+            class="task-input"
+            rows="3"
+            placeholder="O que os agentes devem fazer? Ex: implemente parsePrice em src/price.mjs conforme SPEC.md"
+          ></textarea>
+
+          <div class="task-row">
+            <label class="field">
+              <span>modo</span>
+              <select id="modeSelect">
+                <option value="template" selected>template (cópia isolada)</option>
+                <option value="project">projeto real (git)</option>
+              </select>
+            </label>
+
+            <label class="field" id="templateField">
+              <span>template</span>
+              <select id="templateSelect">
+                <option value="price-parser" selected>price-parser</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="field field-full" id="projectField" hidden>
+            <span>pasta do projeto</span>
+            <span class="path-row">
+              <input
+                id="projectInput"
+                class="text-input"
+                type="text"
+                placeholder="C:\caminho\do\projeto"
+                autocomplete="off"
+                spellcheck="false"
+                list="recentProjects"
+              />
+              <button class="btn btn-small" id="btnBrowse" type="button" title="Escolher pasta">…</button>
+            </span>
+            <datalist id="recentProjects"></datalist>
+          </label>
+
+          <p class="panel-note" id="taskNote">
+            o Planner decompõe a tarefa em um grafo e os agentes executam
+          </p>
+        </section>
+
+        <section class="panel panel-plan" id="planPanel" hidden>
+          <header class="panel-head">
+            <h2 class="panel-title">Plano</h2>
+            <span class="plan-meta" id="planMeta"></span>
+          </header>
+          <ol class="plan-list" id="planList"></ol>
+        </section>
+
+        <section class="panel panel-diff" id="diffPanel" hidden>
+          <header class="panel-head">
+            <h2 class="panel-title">Alterações</h2>
+            <span class="plan-meta" id="diffMeta"></span>
+          </header>
+          <div class="diff-body" id="diffBody"></div>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">Agentes</h2>
+          <div class="roster" id="roster"></div>
+          <p class="panel-note">clique em um card para filtrar o log</p>
+        </section>
+
+        <section class="panel panel-log">
+          <header class="panel-head">
+            <h2 class="panel-title">Eventos</h2>
+            <button class="ghost" id="btnClear">limpar</button>
+          </header>
+          <ol class="log" id="log"></ol>
+          <p class="log-empty" id="logEmpty">Nenhum evento ainda — clique em Iniciar.</p>
+        </section>
+      </aside>
+    </main>
+
+    <dialog class="picker" id="pickerDialog">
+      <header class="picker-head">
+        <strong>Escolher pasta</strong>
+        <button class="ghost" id="pickerClose" type="button">fechar</button>
+      </header>
+
+      <div class="picker-path" id="pickerPath">—</div>
+
+      <div class="picker-actions">
+        <button class="btn btn-small" id="pickerUp" type="button">↑ acima</button>
+        <button class="btn btn-small" id="pickerHome" type="button">início</button>
+        <button class="btn btn-small" id="pickerPick" type="button">usar esta pasta</button>
+      </div>
+
+      <ul class="picker-list" id="pickerList"></ul>
+      <p class="picker-note" id="pickerNote"></p>
+    </dialog>
+
+    <script type="module" src="/js/main.js"></script>
+  </body>
+</html>

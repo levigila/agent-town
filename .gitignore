@@ -1,0 +1,12 @@
+# Chaves de API — NUNCA versionar
+.env
+.env.local
+.env.*.local
+
+# Execuções reais: contêm workspaces gerados pelos agentes
+runs/
+
+# Artefatos locais
+preview.png
+node_modules/
+*.log

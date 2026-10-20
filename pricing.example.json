@@ -1,0 +1,19 @@
+{
+  "_comentario": "Precos em dolar por 1M de tokens. '_default' e usado quando o modelo nao esta na lista — assim o teto BUDGET_USD nunca fica cego. Copie para pricing.json e ajuste.",
+  "_default": { "input_per_1m": 0.7, "output_per_1m": 2.2 },
+
+  "deepseek-v4.1-flash": { "input_per_1m": 0.14, "output_per_1m": 0.22 },
+  "qwen3.8-27b": { "input_per_1m": 0.12, "output_per_1m": 0.98 },
+  "glm-5.2": { "input_per_1m": 0.7, "output_per_1m": 2.2 },
+
+  "glm-5.3-flash": { "input_per_1m": 0.7, "output_per_1m": 2.2 },
+  "deepseek-v4-pro": { "input_per_1m": 0.7, "output_per_1m": 2.2 },
+  "deepseek-v4-pro-0813": { "input_per_1m": 0.7, "output_per_1m": 2.2 },
+  "mimo-v2.6-flash": { "input_per_1m": 0.7, "output_per_1m": 2.2 },
+  "kimi-k3": { "input_per_1m": 0.7, "output_per_1m": 2.2 },
+  "minimax-m3": { "input_per_1m": 0.7, "output_per_1m": 2.2 },
+  "jev-router": { "input_per_1m": 0.7, "output_per_1m": 2.2 },
+
+  "gemini-2.5-pro": { "input_per_1m": 1.25, "output_per_1m": 10.0 },
+  "gemini-2.5-flash": { "input_per_1m": 0.3, "output_per_1m": 2.5 }
+}
