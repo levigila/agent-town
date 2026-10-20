@@ -39,6 +39,10 @@ const COL = {
   rug2: '#463c5e',
 };
 
+// Janela da parede esquerda (ver drawWall) e posicao do quadro de avisos logo abaixo dela.
+const WINDOW = { x: 92, y: 10, w: 88, h: 30 };
+const BOARD_LINES = ['reuniao 10h', 'deploy sexta', 'cafe acabou'];
+
 const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
 
 /**
@@ -87,6 +91,43 @@ export function drawFloor(ctx) {
   for (let y = WALL_H; y <= WORLD.h; y += 64) R(ctx, 0, y, WORLD.w, 1, theme.seam);
 }
 
+/**
+ * Quadro de avisos (cortica) na parede esquerda, logo abaixo da janela.
+ * Desenha a moldura e tres recados curtos.
+ * @param ctx contexto 2d
+ */
+export function drawBoard(ctx) {
+  const x = WINDOW.x;
+  const w = WINDOW.w;
+  const y = WINDOW.y + WINDOW.h + 4; // abaixo da janela
+  const maxH = WALL_H - 8 - y; // nao invade o rodape da parede
+  const h = Math.max(12, Math.min(20, maxH));
+
+  // moldura
+  R(ctx, x, y, w, h, '#0f1319');
+  R(ctx, x + 1, y + 1, w - 2, h - 2, '#12161d');
+  // cortica
+  R(ctx, x + 2, y + 2, w - 4, h - 4, '#b08455');
+  R(ctx, x + 2, y + 2, w - 4, 1, '#c79a6b');
+  R(ctx, x + 2, y + h - 3, w - 4, 1, 'rgba(0,0,0,0.25)');
+
+  // preguinhos nos cantos
+  R(ctx, x + 3, y + 3, 1, 1, '#5c3a1e');
+  R(ctx, x + w - 4, y + 3, 1, 1, '#5c3a1e');
+  R(ctx, x + 3, y + h - 4, 1, 1, '#5c3a1e');
+  R(ctx, x + w - 4, y + h - 4, 1, 1, '#5c3a1e');
+
+  // tres linhas de recado
+  const lh = (h - 4) / BOARD_LINES.length;
+  const fs = Math.max(5, Math.min(7, Math.round(lh - 1)));
+  const font = `${fs}px monospace`;
+  for (let i = 0; i < BOARD_LINES.length; i += 1) {
+    const ty = y + 2 + lh * (i + 0.5);
+    T(ctx, BOARD_LINES[i], x + w / 2, ty, '#2a1c10', font, 'center');
+    R(ctx, x + 6, ty + Math.ceil(fs / 2) + 1, w - 12, 1, 'rgba(90,60,30,0.22)');
+  }
+}
+
 export function drawWall(ctx, now) {
   R(ctx, 0, 0, WORLD.w, WALL_H, COL.wall);
   R(ctx, 0, 0, WORLD.w, 5, COL.wallTrim);
@@ -96,13 +137,16 @@ export function drawWall(ctx, now) {
   for (let x = 0; x < WORLD.w; x += 40) R(ctx, x, 5, 1, WALL_H - 9, 'rgba(0,0,0,0.16)');
 
   // janela
-  R(ctx, 92, 10, 88, 30, '#151a24');
+  R(ctx, WINDOW.x, WINDOW.y, WINDOW.w, WINDOW.h, '#151a24');
   R(ctx, 94, 12, 84, 26, '#1d2b3d');
   R(ctx, 134, 12, 2, 26, '#151a24');
   R(ctx, 94, 24, 84, 2, '#151a24');
   // brilho da janela variando devagar
   const glow = 0.06 + Math.sin(now / 2600) * 0.03;
   R(ctx, 94, 12, 84, 26, `rgba(120,190,255,${glow.toFixed(3)})`);
+
+  // quadro de avisos, abaixo da janela
+  drawBoard(ctx);
 
   // quadro branco
   R(ctx, 300, 10, 100, 30, '#0f1319');
