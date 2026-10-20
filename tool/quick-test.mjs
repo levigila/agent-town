@@ -12,9 +12,14 @@
 import { execFileSync } from 'node:child_process';
 
 const CHECKS = [
-  ['check.mjs', 'imports, exports e DOM'],
+  ['check.mjs', 'sintaxe, imports, exports e DOM'],
   ['smoke.mjs', 'maquina de estados e render'],
   ['test-graph.mjs', 'validacao do grafo de tarefas'],
+  // A UI e o unico arquivo que nenhum outro teste executava: um erro dentro
+  // dele passava pela suite inteira e so aparecia no navegador, como tela
+  // preta sem nenhum agente. Agora os proprios agentes pegam isso no
+  // run_tests, antes de commitar.
+  ['test-ui.mjs', 'carrega a UI e aceita todos os eventos'],
 ];
 
 let failed = 0;

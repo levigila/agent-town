@@ -210,6 +210,23 @@ export class Orchestrator {
     }
   }
 
+  /** Tokens que ainda cabem no teto (null quando nao ha teto). */
+  _tokensLeft() {
+    const max = this.config.limits.maxTokens;
+    if (!max || max <= 0) return null;
+    return Math.max(0, max - (this.totals.in + this.totals.out));
+  }
+
+  /**
+   * Ponto a partir do qual o agente e avisado para entregar.
+   * 80% do teto: sobra folga para escrever os arquivos e rodar testes.
+   */
+  _softBudgetLimit() {
+    const max = this.config.limits.maxTokens;
+    if (!max || max <= 0) return 0;
+    return Math.round(max * 0.2);
+  }
+
   _checkAbort() {
     if (!this.running || this.controller?.signal.aborted) throw new Aborted('execucao interrompida');
   }
@@ -302,15 +319,26 @@ export class Orchestrator {
       await this._execute(byRole, env);
     } catch (err) {
       if (err instanceof BudgetExceeded) {
+        // Diz QUEM gastou: sem isso o usuario nao sabe se o problema e o
+        // modelo lendo demais, tarefas demais, ou uma tarefa grande demais.
+        const ranked = Object.entries(this.perAgent)
+          .sort((a, b) => b[1].in + b[1].out - (a[1].in + a[1].out))
+          .slice(0, 3)
+          .map(([id, u]) => `${id} (${((u.in + u.out) / 1000).toFixed(0)}k)`)
+          .join(', ');
+
         const hint =
           'Os agentes gastaram o teto antes de concluir. Aumente MAX_TOKENS, ' +
-          'reduza MAX_TASKS, ou quebre a tarefa em pedacos menores.';
+          'reduza MAX_TASKS, ou quebre a tarefa em pedacos menores.' +
+          (ranked ? ` Maiores gastos: ${ranked}.` : '');
+
         this._emit('agent_error', null, { text: `${err.message}. ${hint}` });
         this._emit('run_finished', null, {
           reason: 'budget',
           error: err.message,
           hint,
           total: { ...this.totals },
+          spent: ranked,
         });
       } else if (err instanceof Aborted) {
         this._emit('run_finished', null, { reason: 'stopped', total: { ...this.totals } });
@@ -368,6 +396,12 @@ export class Orchestrator {
 
     const branchInfo = await prepareWorkBranch(resolved.path, runId, tmpDir);
     if (!branchInfo.ok) return { ok: false, error: branchInfo.error };
+
+    // Avisa quando voltamos para a branch principal: sem isso o usuario acha
+    // que perdeu o trabalho anterior (ele está na branch, só não está ativa).
+    if (branchInfo.note) {
+      this._emit('agent_thinking', 'planner', { text: branchInfo.note });
+    }
 
     const projectConfig = await loadProjectConfig(resolved.path);
     const tree = await projectContext(resolved.path);
@@ -691,6 +725,16 @@ export class Orchestrator {
       }
     } catch (err) {
       this._emit('agent_error', null, { text: `falha ao gerar diff: ${err.message}` });
+    } finally {
+      // Devolve o repositorio para a branch de origem.
+      //
+      // Sem isso o repo ficava parado na branch agent-town/<runId>, e a
+      // proxima execucao criava a branch dela A PARTIR da anterior — as
+      // execucoes empilhavam e cada uma herdava as mudancas da anterior.
+      // (A branch em si continua existindo, para revisao e merge.)
+      if (this.project?.originalBranch && this.project?.branch) {
+        await cleanupBranch(env.workspace, null, this.project.originalBranch, env.tmpDir);
+      }
     }
   }
 
@@ -720,11 +764,34 @@ export class Orchestrator {
 
     // Escopo do cache de leitura: uma conversa por execução de agente.
     const scope = `${roleId}:${++this._scopeSeq}`;
+    let warnedBudget = false;
 
     while (steps < maxSteps) {
       this._checkAbort();
       this._guardBudget();
       steps += 1;
+
+      // Teto quase atingido: avisa o agente para ENTREGAR agora.
+      //
+      // Sem isso o agente continua lendo arquivo até o teto estourar, e a
+      // execução inteira morre sem ter escrito nada — foi assim que 514k
+      // tokens viraram zero de entrega.
+      if (!warnedBudget) {
+        const left = this._tokensLeft();
+        if (left !== null && left <= this._softBudgetLimit()) {
+          warnedBudget = true;
+          this._emit('agent_thinking', roleId, {
+            text: `orcamento em ${Math.round(100 - (left / this.config.limits.maxTokens) * 100)}% — pedindo para entregar`,
+          });
+          messages.push({
+            role: 'user',
+            content:
+              `ATENCAO: restam cerca de ${left} tokens na execucao inteira (todos os agentes). ` +
+              'Pare de explorar agora. Escreva os arquivos que ja sabe que precisa, rode os testes ' +
+              'se ainda der, e responda. Entregar algo incompleto e melhor que nao entregar nada.',
+          });
+        }
+      }
 
       const res = await provider.limiter.run(() =>
         provider.chat({

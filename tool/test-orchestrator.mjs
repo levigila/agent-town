@@ -322,11 +322,23 @@ process.env.AGENT_TOWN_RUNS_DIR = runsRoot;
   expect((diffEvent?.files || []).length > 0, 'deveria haver arquivos alterados');
   expect(diffEvent?.diff?.includes('parsePrice'), 'diff deveria mostrar o codigo');
 
-  const content = await readFile(path.join(projectDir, 'src', 'price.mjs'), 'utf8');
-  expect(content.includes('Math.round'), 'o arquivo do projeto deveria ter sido alterado');
+  // O codigo alterado vive na BRANCH: ao final o repo volta para "main", entao
+  // o working tree mostra o estado original. Isso e proposital (impede que a
+  // proxima execucao empilhe em cima desta).
+  const content = execFileSync('git', ['show', `${diffEvent.branch}:src/price.mjs`], {
+    cwd: projectDir,
+    encoding: 'utf8',
+  });
+  expect(content.includes('Math.round'), 'o arquivo do projeto deveria ter sido alterado na branch');
 
+  // O repo VOLTA para a branch de origem ao final. Sem isso a proxima execucao
+  // criava a branch dela a partir desta, e as execucoes empilhavam.
   const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: projectDir, encoding: 'utf8' }).trim();
-  expect(branch.startsWith('agent-town/'), `deveria estar na branch de trabalho, esta em ${branch}`);
+  expect(branch === 'main', `deveria voltar para "main" ao final, esta em ${branch}`);
+
+  // a branch de trabalho continua existindo, para revisao e merge
+  const branches = execFileSync('git', ['branch', '--list', 'agent-town/*'], { cwd: projectDir, encoding: 'utf8' });
+  expect(branches.includes(diffEvent.branch), `a branch de trabalho deveria existir: ${branches}`);
 
   let hasRemote = true;
   try {
@@ -337,8 +349,73 @@ process.env.AGENT_TOWN_RUNS_DIR = runsRoot;
   }
   expect(!hasRemote, 'o teste nao deve ter remote (garante que nada foi enviado)');
 
-  const log = execFileSync('git', ['log', '--oneline', '-1'], { cwd: projectDir, encoding: 'utf8' });
+  const log = execFileSync('git', ['log', '--oneline', '-1', diffEvent.branch], { cwd: projectDir, encoding: 'utf8' });
   expect(log.includes('agent-town'), 'commit deveria ter a mensagem do agent-town');
+
+  await rm(projectDir, { recursive: true, force: true });
+}
+
+// ===========================================================================
+// 4b. Duas execuções seguidas NÃO empilham branches
+//
+// Bug real: o repo ficava parado na branch agent-town/<run1>, e o run2 criava
+// a branch dele A PARTIR da run1. Em cinco execuções seguidas isso acumulou
+// mudanças de todas — inclusive um ui.js truncado que deixou a tela preta.
+// ===========================================================================
+{
+  const projectDir = await mkdtemp(path.join(os.tmpdir(), 'agent-town-stack-'));
+
+  execFileSync('git', ['init', '-b', 'main'], { cwd: projectDir, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: projectDir, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.name', 'Test'], { cwd: projectDir, stdio: 'ignore' });
+
+  await mkdir(path.join(projectDir, 'src'), { recursive: true });
+  await mkdir(path.join(projectDir, 'test'), { recursive: true });
+  await writeFile(path.join(projectDir, 'SPEC.md'), '# Tarefa\n', 'utf8');
+  await writeFile(path.join(projectDir, 'src', 'price.mjs'), 'export function parsePrice() { throw new Error("todo"); }\n', 'utf8');
+  await writeFile(
+    path.join(projectDir, 'test', 'price.test.mjs'),
+    `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { parsePrice } from '../src/price.mjs';\ntest('ok', () => assert.equal(parsePrice('R$ 42,90'), 4290));\n`,
+    'utf8',
+  );
+  await writeFile(path.join(projectDir, 'package.json'), JSON.stringify({ name: 'p', type: 'module' }), 'utf8');
+
+  execFileSync('git', ['add', '-A'], { cwd: projectDir, stdio: 'ignore' });
+  execFileSync('git', ['commit', '-m', 'init'], { cwd: projectDir, stdio: 'ignore' });
+
+  const config = baseConfig({ projectRoots: [projectDir] });
+  const heads = [];
+
+  for (let i = 0; i < 2; i++) {
+    const events = [];
+    const fake = makeFakeProviders();
+    const orch = new Orchestrator((ev) => events.push(ev), config, { providerFactory: () => fake });
+    await runOrch(orch, { task: `execucao ${i + 1}`, mode: 'project', projectPath: projectDir });
+
+    const diff = events.find((e) => e.type === 'diff_ready');
+    expect(diff?.originalBranch === 'main', `run ${i + 1}: base deveria ser main, veio ${diff?.originalBranch}`);
+    heads.push(diff?.branch);
+  }
+
+  // a segunda execução NÃO pode ter a primeira como ancestral
+  const ancestors = execFileSync('git', ['log', '--format=%s', heads[1]], {
+    cwd: projectDir,
+    encoding: 'utf8',
+  });
+  const count = ancestors.trim().split('\n').filter(Boolean).length;
+  expect(count === 2, `a 2a branch deveria ter so 2 commits (init + ela), tem ${count}: ${ancestors}`);
+
+  // confirma pelo git que heads[0] NÃO é ancestral de heads[1]
+  let isAncestor = true;
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', heads[0], heads[1]], { cwd: projectDir, stdio: 'ignore' });
+  } catch {
+    isAncestor = false;
+  }
+  expect(!isAncestor, `a 2a execucao herdou a 1a (${heads[0]} e ancestral de ${heads[1]})`);
+
+  const current = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: projectDir, encoding: 'utf8' }).trim();
+  expect(current === 'main', `deveria terminar em main, esta em ${current}`);
 
   await rm(projectDir, { recursive: true, force: true });
 }

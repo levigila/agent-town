@@ -102,6 +102,52 @@ export async function currentBranch(root, tmpDir) {
   return null; // detached HEAD ou repo quebrado
 }
 
+/** A branch existe neste repositório? */
+export async function branchExists(root, name, tmpDir) {
+  const res = await git(root, ['show-ref', '--verify', '--quiet', `refs/heads/${name}`], { tmpDir });
+  return res.code === 0;
+}
+
+/** Prefixo das branches que o agent-town cria. */
+export const WORK_BRANCH_PREFIX = 'agent-town/';
+
+/** Esta branch é uma branch de trabalho do agent-town? */
+export const isWorkBranch = (name) => !!name && name.startsWith(WORK_BRANCH_PREFIX);
+
+/**
+ * A branch de onde o trabalho deve começar.
+ *
+ * NUNCA é uma branch do próprio agent-town. Sem essa regra as execuções
+ * EMPILHAM: o run 2 nasce do run 1, o run 3 do run 2, e cada um herda as
+ * mudanças do anterior. Numa sequência de execuções isso acumulou um
+ * `ui.js` truncado de um run anterior, e todas as seguintes herdaram o
+ * arquivo quebrado — a tela ficou preta.
+ *
+ * @returns {Promise<{branch: string, switched: boolean, note?: string}>}
+ */
+export async function baseBranch(root, tmpDir) {
+  const current = await currentBranch(root, tmpDir);
+
+  if (current && !isWorkBranch(current)) {
+    return { branch: current, switched: false };
+  }
+
+  // Estamos numa branch de trabalho (ou detached): procura a branch principal.
+  for (const candidate of ['main', 'master', 'trunk', 'develop']) {
+    if (await branchExists(root, candidate, tmpDir)) {
+      return {
+        branch: candidate,
+        switched: candidate !== current,
+        note: current
+          ? `a branch atual era "${current}" (de uma execucao anterior); usando "${candidate}" como base para nao empilhar`
+          : `HEAD destacado; usando "${candidate}" como base`,
+      };
+    }
+  }
+
+  return { branch: current, switched: false };
+}
+
 /** Lista de arquivos modificados/não rastreados (formato porcelain cru). */
 export async function dirtyFiles(root, tmpDir) {
   const res = await git(root, ['status', '--porcelain'], { tmpDir, trim: false });
@@ -251,16 +297,31 @@ export async function prepareWorkBranch(root, runId, tmpDir) {
     };
   }
 
+  // Nunca empilhar execuções: se estamos numa branch do agent-town, volta
+  // para a branch principal antes de criar a nova.
+  const base = await baseBranch(root, tmpDir);
+  if (base.switched) {
+    const co = await git(root, ['checkout', base.branch], { tmpDir });
+    if (co.code !== 0) {
+      return {
+        ok: false,
+        error: `nao foi possivel voltar para "${base.branch}": ${co.output || 'falha no checkout'}`,
+        originalBranch,
+      };
+    }
+  }
+
   const branch = `agent-town/${runId}`;
   const created = await createBranch(root, branch, tmpDir);
   if (!created.ok) {
-    return { ok: false, error: created.error, originalBranch };
+    return { ok: false, error: created.error, originalBranch: base.branch };
   }
 
   return {
     ok: true,
     branch,
-    originalBranch,
+    originalBranch: base.branch,
+    note: base.note,
     baseline: untracked.map((line) => line.slice(3).trim()),
   };
 }

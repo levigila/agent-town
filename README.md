@@ -153,8 +153,11 @@ O que o modo projeto garante:
 
 1. **Caminho validado.** A pasta tem que existir e ser um repositório git **com
    pelo menos um commit** — sem isso não há base para comparar o diff.
-2. **Branch isolada.** Cria `agent-town/<runId>` a partir da branch atual.
-   Nunca trabalha na sua branch.
+2. **Branch isolada, sem empilhar.** Cria `agent-town/<runId>` a partir da
+   **branch principal** (`main`/`master`) — nunca de uma branch do próprio
+   agent-town. Ao final, o repositório **volta** para a branch principal.
+   Sem essas duas regras as execuções empilham: a segunda nasce da primeira, a
+   terceira da segunda, e cada uma herda as mudanças da anterior.
 3. **Working tree protegida.** Arquivo rastreado com alteração não commitada
    **bloqueia** a execução (senão o diff ficaria misturado). Arquivos não
    rastreados, como `.vscode/`, são tolerados e ficam fora do commit.
@@ -162,6 +165,11 @@ O que o modo projeto garante:
    arquivo, com `+` e `-`.
 5. **Commit na branch, nunca push.** Não existe `git push` em nenhum lugar do código.
 6. **Testes plugáveis.** O projeto define seu próprio comando em `.agent-town.json`.
+
+> **Onde fica o código que os agentes escreveram?** Na branch `agent-town/<runId>`.
+> Como o repositório volta para `main` ao final, o *working tree* mostra o estado
+> original — isso é proposital. Use `git diff main...agent-town/<runId>` para ver,
+> e `git merge` para trazer.
 
 Para revisar depois:
 
@@ -364,22 +372,36 @@ Modelo fora do seu plano responde `404 model not available in any of your groups
 npm test
 ```
 
-Oito verificações, todas **sem gastar token**:
+Doze verificações, todas **sem gastar token**:
 
 | teste | o que valida |
 |---|---|
-| `check` | grafo de imports/exports e IDs do DOM |
+| `check` | **sintaxe** de todo `.js`/`.mjs`, grafo de imports/exports e IDs do DOM |
 | `smoke` | 1200 frames da máquina de estados com canvas stubado |
 | `test-graph` | parsing de JSON, schema, DAG, ciclos, limites |
 | `verify-template` | a tarefa do template é resolvível |
-| `test-tools` | sandbox: `../`, caminho absoluto, `run_tests` |
+| `test-tools` | sandbox: `../`, caminho absoluto, `run_tests`, guarda de escrita |
 | `test-project` | allowlist de caminho, `.agent-town.json`, ferramentas plugáveis |
-| `test-orchestrator` | grafo real, fallback, contexto, git branch/diff/commit, recusas |
+| `test-orchestrator` | grafo real, fallback, contexto, git branch/diff/commit, recusas, **não empilhar branches** |
 | `test-adapters` | adaptadores HTTP contra servidor local falso |
+| `test-agents` | instâncias por função, permissões do OpenCode, guarda de escrita |
+| `test-parallel` | instâncias diferentes se sobrepõem no tempo; a mesma serializa |
+| `test-ui` | **`ui.js` carrega e constrói** com DOM falso, aceita todos os eventos |
+| `test-budget` | aviso em 80% do teto e relatório de quem gastou |
+
+Duas dessas linhas existem por causa de incidentes reais:
+
+- **`check` agora faz parse de verdade.** A validação anterior era só de imports
+  por regex, então um `ui.js` **truncado** (escrito em partes, cortado pelo teto
+  de tokens) passava por toda a suíte. No navegador o módulo não carregava, o
+  `main.js` nunca rodava, e a tela ficava **preta sem nenhum agente**.
+- **`test-ui` executa a UI.** O `smoke` substituía `ui` por um mock, então
+  `ui.js` não era executado em teste nenhum — qualquer erro dentro dele só
+  aparecia no navegador.
 
 O `test-orchestrator` cobre inclusive o que **não** deve acontecer: recusar
-working tree suja, recusar caminho fora das raízes, e não commitar lixo
-não rastreado.
+working tree suja, recusar caminho fora das raízes, não commitar lixo não
+rastreado, e não herdar a branch de uma execução anterior.
 
 ---
 
@@ -440,11 +462,42 @@ Ele só consome eventos. Trocar simulado por real não muda uma linha do cliente
 | `token_usage` | `model`, `in`, `out`, `cost` | contador no card |
 | `agent_done` | `summary`, `taskId` | balão verde |
 | `agent_error` | `text` | balão vermelho |
+| `rate_limit` | `remaining`, `limit`, `resetAt` | selo de requisições no topo |
 | `diff_ready` | `branch`, `files`, `diff` | painel de alterações |
 
 ---
 
-## 7. Custo medido
+## 7. Orçamento: o que acontece quando o teto chega
+
+`MAX_TOKENS` é o teto de tokens (entrada + saída) da **execução inteira**, não
+por agente. Quando estoura, a execução para — e sem aviso o agente continua
+lendo arquivo até morrer, sem entregar nada.
+
+Duas proteções:
+
+1. **Aviso em 80%.** Quando resta menos de 20% do teto, o agente recebe uma
+   mensagem dizendo quantos tokens sobraram e para entregar o que já tem.
+   Entregar incompleto é melhor que não entregar.
+2. **Relatório de quem gastou.** Ao estourar, o `run_finished` traz os três
+   agentes que mais consumiram, para você saber se o problema é o modelo, o
+   número de tarefas, ou o tamanho da tarefa.
+
+Ajuste em `.env`:
+
+```env
+MAX_TOKENS=500000   # teto da execução inteira
+MAX_TASKS=4         # menos tarefas = menos agentes lendo os mesmos arquivos
+MAX_STEPS=12        # passos por agente
+```
+
+**O teto é compartilhado, e mais agentes gastam mais.** Com `AGENTS_PER_ROLE=2`,
+dois coders leem os mesmos arquivos em conversas separadas — o cache de leitura
+é por conversa, então não há economia entre instâncias. Se estourar com
+frequência, reduza `AGENTS_PER_ROLE` ou `MAX_TASKS` antes de aumentar o teto.
+
+---
+
+## 8. Custo medido
 
 Execução real com 3 tarefas (researcher → coder → reviewer), 9 testes:
 
@@ -460,7 +513,7 @@ tentativa na maioria dos casos.
 
 ---
 
-## 8. Limitações conhecidas
+## 9. Limitações conhecidas
 
 - **Gemini bloqueado em rede corporativa.** Se o `doctor` mostrar
   `SELF_SIGNED_CERT_IN_CHAIN`, o proxy da empresa intercepta TLS. Não é a chave
@@ -474,7 +527,7 @@ tentativa na maioria dos casos.
 
 ---
 
-## 9. Próximos passos
+## 10. Próximos passos
 
 1. **Replay** — gravar os eventos em `runs/<id>/events.jsonl` e reproduzir sem custo.
 2. **Mais templates** em `templates/` (o seletor já lê a pasta).
