@@ -1,7 +1,7 @@
 // Cola tudo: eventos SSE -> estado dos agentes -> render.
 
 import { AGENT_DEFS } from './config.js';
-import { createAgents } from './agent.js';
+import { createAgents, agentBounds } from './agent.js';
 import { applyEvent, applySnapshot, resetRoom } from './handlers.js';
 import { Renderer } from './renderer.js';
 import { UI } from './ui.js';
@@ -23,6 +23,46 @@ const ui = new UI({
   onMeetingDecide: (payload) => post('/api/meeting/decide', payload),
   onMeetingStop: () => post('/api/meeting/stop', {}),
 });
+
+// ---------------------------------------------------------------------------
+// Hover (tooltip do agente)
+// ---------------------------------------------------------------------------
+//
+// O id do agente sob o mouse vive aqui, num unico lugar. O renderer le esse
+// valor (por `getHoveredAgentId()` ou pela copia em `renderer.hoveredAgentId`,
+// que mantemos sincronizada para nao criar import circular main <- renderer)
+// e desenha o tooltip; o resto do arquivo so precisa saber quem esta em foco.
+
+let hoveredAgentId = null;
+
+/** Id do agente sob o mouse (ou null). */
+export function getHoveredAgentId() {
+  return hoveredAgentId;
+}
+
+/** Define o agente em foco; mantem a copia lida pelo renderer em sincronia. */
+function setHoveredAgentId(id) {
+  hoveredAgentId = id || null;
+  renderer.hoveredAgentId = hoveredAgentId;
+}
+
+/**
+ * Agente sob um ponto de tela, ou null.
+ *
+ * Itera do mais a frente para o mais atras (pos.y decrescente) para casar com
+ * a ordem de desenho: quem esta na frente ganha o hover.
+ */
+function agentAt(clientX, clientY) {
+  const p = renderer.toWorld(clientX, clientY);
+  if (!p) return null;
+
+  const list = Object.values(agents).sort((a, b) => b.pos.y - a.pos.y);
+  for (const a of list) {
+    const b = agentBounds(a);
+    if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) return a;
+  }
+  return null;
+}
 
 /**
  * Aplica o estado da reuniao na cena e no card.
@@ -259,12 +299,20 @@ overlayCanvas.addEventListener('click', (e) => {
 });
 
 overlayCanvas.addEventListener('mousemove', (e) => {
+  // Mesa primeiro (mesma prioridade do clique), depois o agente sob o mouse.
   if (renderer.hitMeeting(e.clientX, e.clientY)) {
     overlayCanvas.style.cursor = 'pointer';
+    setHoveredAgentId(null);
     return;
   }
-  const hit = renderer.pick(e.clientX, e.clientY);
+  const hit = agentAt(e.clientX, e.clientY);
+  setHoveredAgentId(hit ? hit.def.id : null);
   overlayCanvas.style.cursor = hit ? 'pointer' : 'default';
+});
+
+overlayCanvas.addEventListener('mouseleave', () => {
+  setHoveredAgentId(null);
+  overlayCanvas.style.cursor = 'default';
 });
 
 loadConfig();
