@@ -39,7 +39,14 @@ const expect = (cond, msg) => {
   const coder2 = two.find((a) => a.id === 'coder-2');
   expect(coder2.role === 'coder', 'coder-2 deveria ter role coder');
   expect(coder2.index === 1, 'coder-2 deveria ter index 1');
-  expect(coder2.name === 'Coder 2', `nome deveria distinguir: ${coder2.name}`);
+  // Nome proprio (Clara), nao "Coder 2": e o que aparece acima da cabeca.
+  expect(coder2.name === 'Clara', `coder-2 deveria se chamar Clara: ${coder2.name}`);
+  expect(two.find((a) => a.id === 'coder-1')?.name === 'Caio', 'coder-1 deveria se chamar Caio');
+  expect(two.find((a) => a.id === 'planner')?.name === 'Ada', 'planner deveria se chamar Ada');
+  expect(
+    new Set(two.map((a) => a.name)).size === two.length,
+    `nomes deveriam ser unicos: ${two.map((a) => a.name).join(', ')}`,
+  );
 
   // uma instância por papel: id limpo, sem sufixo
   const one = buildAgentInstances(roles, 1);
