@@ -191,3 +191,34 @@ export function createAgents(agentList) {
   for (const def of agentList) map[def.id] = new AgentView(def);
   return map;
 }
+
+// -- geometria do agente -----------------------------------------------------
+//
+// Uma unica fonte de verdade para "onde o bonequinho ocupa espaco" no mundo.
+// O desenho (sprite.js), o hit-test (renderer.pick) e o tooltip (main.js)
+// consomem estas constantes, para nunca divergirem.
+//
+// Origem: o pe do agente (agent.pos.x/pos.y) e o ponto de ancoragem do sprite.
+// A caixa sobe AGENT_BOX.h - AGENT_BOX.foot pixels a partir do pe e desce
+// AGENT_BOX.foot pixels abaixo dele.
+export const AGENT_BOX = { w: 20, h: 32, foot: 3 };
+
+/**
+ * Caixa do agente em coordenadas de mundo (sem bob de animacao).
+ * @param {{pos:{x:number,y:number}}} agent
+ * @returns {{x:number,y:number,w:number,h:number}}
+ */
+export function agentBounds(agent) {
+  return {
+    x: agent.pos.x - AGENT_BOX.w / 2,
+    y: agent.pos.y - (AGENT_BOX.h - AGENT_BOX.foot),
+    w: AGENT_BOX.w,
+    h: AGENT_BOX.h,
+  };
+}
+
+/** Ponto do pe do agente (origem usada pelo sprite), derivado de agentBounds. */
+export function agentFoot(agent) {
+  const b = agentBounds(agent);
+  return { x: b.x + b.w / 2, y: b.y + b.h - AGENT_BOX.foot };
+}

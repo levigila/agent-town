@@ -3,6 +3,7 @@
 // facil trocar por spritesheets depois.
 
 import { shirtOf, shade } from './config.js';
+import { agentFoot } from './agent.js';
 
 const R = (ctx, x, y, w, h, c) => {
   ctx.fillStyle = c;
@@ -22,13 +23,14 @@ const SHADOW_ALPHA = 0.3;
 /**
  * Desenha a sombra no chao sob o agente.
  * Deve ser chamada ANTES do corpo do sprite (a cada frame), pois usa
- * agent.pos.x / agent.pos.y (pe do agente no chao).
+ * o pe do agente (agentFoot, derivado de agentBounds).
  * @param ctx canvas 2d no espaco do mundo (480x304)
  * @param agent instancia de AgentView (pos.x, pos.y)
  */
 export function drawShadow(ctx, agent) {
-  const fx = Math.round(agent.pos.x);
-  const fy = Math.round(agent.pos.y);
+  const foot = agentFoot(agent);
+  const fx = Math.round(foot.x);
+  const fy = Math.round(foot.y);
 
   ctx.save();
   ctx.fillStyle = `rgba(0,0,0,${SHADOW_ALPHA})`;
@@ -73,8 +75,10 @@ export function drawAgent(ctx, agent, now) {
   // Cor da camisa personalizada no painel (config.shirtOf cai no pal.shirt padrao)
   const shirt = shirtOf(agent.def.id);
   const shirt2 = shade(shirt, -0.16);
-  const fx = Math.round(agent.pos.x);
-  const fy = Math.round(agent.pos.y);
+  // Origem do desenho vem de agentBounds (mesma caixa usada no hit-test).
+  const foot = agentFoot(agent);
+  const fx = Math.round(foot.x);
+  const fy = Math.round(foot.y);
 
   const walking = agent.state === 'walking';
   const working = agent.state === 'working' || agent.state === 'thinking';

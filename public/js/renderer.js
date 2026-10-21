@@ -3,6 +3,7 @@
 
 import { WORLD, DESK, MEETING, AGENT_LIST, hitMeetingButton } from './config.js';
 import { drawAgent } from './sprite.js';
+import { agentBounds } from './agent.js';
 import * as W from './world.js';
 
 const TONES = {
@@ -73,13 +74,21 @@ export class Renderer {
     this.meeting = { called: false, busy: false };
   }
 
+  /** Converte coordenadas de tela (clientX/clientY) para o mundo logico. */
+  toWorld(clientX, clientY) {
+    const rect = this.overlay.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    return {
+      x: (clientX - rect.left) / (this.k || 1),
+      y: (clientY - rect.top) / (this.k || 1),
+    };
+  }
+
   /** O ponto (coordenadas de tela) esta sobre o botao da mesa de reuniao? */
   hitMeeting(clientX, clientY) {
-    const rect = this.overlay.getBoundingClientRect();
-    if (!rect.width || !rect.height) return false;
-    const wx = (clientX - rect.left) / (this.k || 1);
-    const wy = (clientY - rect.top) / (this.k || 1);
-    return hitMeetingButton(wx, wy);
+    const p = this.toWorld(clientX, clientY);
+    if (!p) return false;
+    return hitMeetingButton(p.x, p.y);
   }
 
   resize() {
@@ -118,7 +127,8 @@ export class Renderer {
     const wx = (clientX - rect.left) / this.k;
     const wy = (clientY - rect.top) / this.k;
     for (const a of Object.values(this.agents)) {
-      if (wx >= a.pos.x - 10 && wx <= a.pos.x + 10 && wy >= a.pos.y - 29 && wy <= a.pos.y + 3) {
+      const b = agentBounds(a);
+      if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) {
         return a;
       }
     }
