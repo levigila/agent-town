@@ -31,13 +31,20 @@ const MAX_FILES = 4;
  * @param {object} agent instância (id, name, role, roleName)
  * @param {object} opts
  * @param {boolean} [opts.canEdit] false para agentes somente-leitura
+ * @param {string} [opts.fileTree] árvore real, para ancorar os caminhos
  */
-export function buildMeetingPrompt(agent, { canEdit = true } = {}) {
+export function buildMeetingPrompt(agent, { canEdit = true, fileTree = '' } = {}) {
   const papel = agent.roleName || agent.role || 'agente';
 
   const kinds = canEdit
     ? 'visual (mudar o cenario), agente (criar/melhorar um agente), implementacao (codigo do agent-town), processo (como o time trabalha)'
     : 'visual (mudar o cenario), agente (criar/melhorar um agente), processo (como o time trabalha). Voce nao pode propor mudanca de codigo.';
+
+  // Sem os caminhos reais os modelos inventam nomes plausiveis ("server.js",
+  // "public/app.js") e a proposta vira inimplementavel.
+  const caminhos = fileTree
+    ? `\nArquivos que EXISTEM no projeto (use so estes, com o caminho exato):\n${fileTree}\n`
+    : '\nSe nao tiver certeza do caminho, deixe "files" vazio — nao invente nome de arquivo.\n';
 
   return `Voce e ${agent.name}, ${papel} do time agent-town.
 
@@ -49,13 +56,13 @@ Estamos numa reuniao de melhoria. Sua funcao e propor UMA melhoria concreta
 para o proprio agent-town.
 
 Tipos de proposta aceitos: ${kinds}.
-
+${caminhos}
 Regras:
 - Seja ESPECIFICO. "melhorar a UI" nao serve; "destacar o agente que esta
   bloqueado com um icone de cadeado acima da cabeca" serve.
 - Uma proposta por resposta. Menos e melhor.
 - Diga o QUE, o PORQUE e o COMO, em passos que um coder consiga seguir.
-- Cite no maximo ${MAX_FILES} arquivos reais do projeto.
+- Cite no maximo ${MAX_FILES} arquivos, e SOMENTE caminhos que existem na lista acima.
 - Escolha o esforco com honestidade: "pequeno" = menos de 50 linhas.
 - Nao proponha reescrever o projeto. Proponha o proximo passo.
 
@@ -75,12 +82,37 @@ Comece com { e termine com }.`;
 /** Contexto comum da reuniao (vai no prompt do usuario). */
 export function buildMeetingContext({ task = '', fileTree = '' } = {}) {
   return [
-    'Contexto do projeto (arvore de arquivos):',
+    'Arvore de arquivos do projeto:',
     fileTree || '(sem arvore de arquivos)',
     task ? `\nPedido do usuario: ${task}` : '',
   ]
     .filter(Boolean)
     .join('\n');
+}
+
+/**
+ * Normaliza o contexto do projeto para texto.
+ *
+ * `projectContext()` devolve `{ tree, fileCount, truncated }`, nao uma string.
+ * Interpolar o objeto direto mandava literalmente "[object Object]" para o
+ * modelo — dois agentes propuseram "tratar mensagens malformadas" porque
+ * acharam que tinham recebido lixo.
+ */
+export function contextToText(ctx) {
+  if (!ctx) return '';
+  if (typeof ctx === 'string') return ctx;
+
+  if (typeof ctx === 'object' && typeof ctx.tree === 'string') {
+    const extra = ctx.truncated ? '\n(arvore truncada)' : '';
+    const total = Number.isFinite(ctx.fileCount) ? `\n(${ctx.fileCount} arquivos)` : '';
+    return `${ctx.tree}${total}${extra}`;
+  }
+
+  try {
+    return JSON.stringify(ctx);
+  } catch {
+    return '';
+  }
 }
 
 /** Extrai o primeiro objeto JSON balanceado do texto. */
@@ -182,6 +214,38 @@ export function normalizeProposal(raw, agent) {
 const dedupeKey = (p) => p.title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 /**
+ * Separa os caminhos que existem de verdade dos inventados.
+ *
+ * Modelos citam nomes plausíveis que não existem ("server.js" num projeto
+ * onde o arquivo é "server.mjs"). Passar isso adiante manda o coder
+ * perseguir fantasma, então o caminho sai da proposta — mas a ideia fica.
+ *
+ * Comparação tolerante a caixa e a barras, e aceita sufixo (o modelo às
+ * vezes escreve "public/js/world.js" quando a lista tem o mesmo caminho).
+ */
+export function filterKnownFiles(files, knownFiles) {
+  const list = Array.isArray(files) ? files.filter(Boolean) : [];
+  if (!Array.isArray(knownFiles) || !knownFiles.length) return { kept: list, removed: [] };
+
+  const norm = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase().trim();
+  const known = new Set(knownFiles.map(norm));
+
+  const kept = [];
+  const removed = [];
+
+  for (const f of list) {
+    const n = norm(f);
+    if (known.has(n) || knownFiles.some((k) => norm(k).endsWith(`/${n}`) || n.endsWith(`/${norm(k)}`))) {
+      kept.push(f);
+    } else {
+      removed.push(f);
+    }
+  }
+
+  return { kept, removed };
+}
+
+/**
  * Roda a reuniao: pergunta a cada agente e devolve as propostas validas.
  *
  * @param {object} params
@@ -200,9 +264,14 @@ export async function runMeeting({
   byInstance,
   byRole,
   context = '',
+  fileTree = '',
+  knownFiles = [],
   signal,
   emit = () => {},
-  maxTokens = 900,
+  // 900 tokens truncava a resposta no meio do JSON (finish_reason "length"):
+  // uma proposta completa com why + how gasta ~1500. Era por isso que tres
+  // agentes devolviam "resposta nao e um objeto".
+  maxTokens = 2048,
   timeoutMs = 90000,
 }) {
   // Todos participam, inclusive o Planner: ele e quem enxerga o processo
@@ -228,31 +297,65 @@ export async function runMeeting({
 
     emit('agent_thinking', agent.id, { text: 'pensando em uma melhoria' });
 
-    try {
-      const res = await provider.limiter.run(() =>
+    const ask = (tokens) =>
+      provider.limiter.run(() =>
         provider.chat({
           messages: [
-            { role: 'system', content: agent.prompt || buildMeetingPrompt(agent, { canEdit }) },
+            {
+              role: 'system',
+              content: agent.prompt || buildMeetingPrompt(agent, { canEdit, fileTree }),
+            },
             { role: 'user', content: context },
           ],
           tools: [],
           temperature: 0.8,
-          maxTokens,
+          maxTokens: tokens,
           signal,
         }),
       );
 
+    try {
+      let res = await ask(maxTokens);
       usage.in += res.usage?.in || 0;
       usage.out += res.usage?.out || 0;
+
+      // Resposta cortada no teto de saída = JSON incompleto. Repetir com o
+      // dobro do espaço é mais barato que perder a proposta inteira.
+      if (res.finishReason === 'length') {
+        emit('agent_thinking', agent.id, { text: 'resposta cortada, tentando com mais espaco' });
+        res = await ask(maxTokens * 2);
+        usage.in += res.usage?.in || 0;
+        usage.out += res.usage?.out || 0;
+      }
 
       const parsed = extractObject(res.text || '');
       const checked = normalizeProposal(parsed, agent);
 
       if (!checked.ok) {
-        errors.push({ agentId: agent.id, problem: checked.problem });
-        emit('agent_error', agent.id, { text: `proposta descartada: ${checked.problem}` });
+        // Mensagem util: diz se foi truncamento ou se o modelo so nao
+        // respondeu JSON. "resposta nao e um objeto" nao ajuda em nada.
+        const problem =
+          res.finishReason === 'length'
+            ? 'resposta truncada no limite de tokens mesmo com espaco extra'
+            : parsed === null
+              ? 'nao devolveu JSON'
+              : checked.problem;
+        errors.push({ agentId: agent.id, problem });
+        emit('agent_error', agent.id, { text: `proposta descartada: ${problem}` });
         return;
       }
+
+      // Caminho inventado nao e erro fatal: a proposta continua valendo, mas
+      // os arquivos inexistentes sao removidos para o coder nao perseguir
+      // fantasma. O usuario ve o aviso no card.
+      const validos = filterKnownFiles(checked.proposal.files, knownFiles);
+      if (validos.removed.length) {
+        emit('agent_thinking', agent.id, {
+          text: `arquivos inexistentes ignorados: ${validos.removed.join(', ')}`,
+        });
+      }
+      checked.proposal.files = validos.kept;
+      checked.proposal.removedFiles = validos.removed;
 
       collected.push(checked.proposal);
       emit('proposal', agent.id, { proposal: checked.proposal });
@@ -308,7 +411,6 @@ export function composeTask(approved) {
     ];
     return partes.filter(Boolean).join('\n');
   });
-
   return [
     'Implemente as melhorias aprovadas na reuniao do escritorio.',
     'Faca uma de cada vez, na ordem, e rode os testes ao final.',

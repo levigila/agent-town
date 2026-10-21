@@ -12,6 +12,8 @@ import {
   composeTask,
   runMeeting,
   buildMeetingPrompt,
+  contextToText,
+  filterKnownFiles,
   PROPOSAL_KINDS,
   KIND_LABEL,
 } from '../src/brainstorm.mjs';
@@ -84,6 +86,68 @@ const expect = (cond, msg) => {
     /nao pode propor mudanca de codigo/.test(somenteLeitura),
     'agente somente-leitura deveria ser avisado',
   );
+
+  // com a arvore real, o prompt precisa lista-la e proibir invencao
+  const comArvore = buildMeetingPrompt(
+    { id: 'coder-1', name: 'Caio', roleName: 'Implementacao' },
+    { canEdit: true, fileTree: 'public/js/world.js\nserver.mjs' },
+  );
+  expect(comArvore.includes('public/js/world.js'), 'deveria listar os arquivos reais');
+  expect(/SOMENTE caminhos que existem/.test(comArvore), 'deveria proibir caminho inventado');
+
+  // sem arvore, deveria pedir para deixar files vazio
+  expect(
+    /nao invente nome de arquivo/.test(comEscrita),
+    'sem arvore, deveria pedir para nao inventar caminho',
+  );
+}
+
+// ===========================================================================
+// 2b. contextToText — o bug do "[object Object]"
+//
+// projectContext() devolve { tree, fileCount, truncated }. Interpolar o objeto
+// direto mandava "[object Object]" para o modelo, e dois agentes propuseram
+// "tratar mensagens malformadas" porque acharam que tinham recebido lixo.
+// ===========================================================================
+{
+  expect(contextToText('texto puro') === 'texto puro', 'string deveria passar direto');
+  expect(contextToText(null) === '', 'null deveria virar string vazia');
+
+  const txt = contextToText({ tree: 'a.js\nb.js', fileCount: 2, truncated: false });
+  expect(txt.includes('a.js'), `deveria usar .tree: ${txt}`);
+  expect(!txt.includes('[object Object]'), 'NUNCA deveria conter [object Object]');
+
+  const truncado = contextToText({ tree: 'a.js', fileCount: 99, truncated: true });
+  expect(/truncada/.test(truncado), 'deveria avisar que a arvore foi truncada');
+  expect(/99/.test(truncado), 'deveria citar a contagem de arquivos');
+
+  // objeto sem .tree nao pode quebrar
+  const outro = contextToText({ foo: 'bar' });
+  expect(!outro.includes('[object Object]'), `objeto desconhecido virou lixo: ${outro}`);
+}
+
+// ===========================================================================
+// 2c. filterKnownFiles — caminho inventado sai, a ideia fica
+// ===========================================================================
+{
+  const conhecidos = ['public/js/world.js', 'public/js/sprite.js', 'server.mjs', 'src/brainstorm.mjs'];
+
+  const ok = filterKnownFiles(['public/js/world.js', 'server.mjs'], conhecidos);
+  expect(ok.kept.length === 2 && ok.removed.length === 0, `validos deveriam passar: ${JSON.stringify(ok)}`);
+
+  // "server.js" nao existe (o arquivo e server.mjs)
+  const inventado = filterKnownFiles(['server.js', 'public/app.js', 'public/js/sprite.js'], conhecidos);
+  expect(inventado.kept.length === 1, `so o valido deveria ficar: ${inventado.kept}`);
+  expect(inventado.kept[0] === 'public/js/sprite.js', `ficou o errado: ${inventado.kept}`);
+  expect(inventado.removed.length === 2, `deveria remover 2: ${inventado.removed}`);
+
+  // tolerante a barra invertida, caixa e "./"
+  const tolerante = filterKnownFiles(['.\\public\\js\\World.js'], conhecidos);
+  expect(tolerante.kept.length === 1, `deveria aceitar variacao de caminho: ${JSON.stringify(tolerante)}`);
+
+  // sem lista de conhecidos, nao filtra nada
+  const semLista = filterKnownFiles(['qualquer.js'], []);
+  expect(semLista.kept.length === 1 && semLista.removed.length === 0, 'sem lista, nada e removido');
 }
 
 // ===========================================================================
@@ -203,6 +267,89 @@ const proposalJson = (title, kind = 'visual') =>
   const res = await runMeeting({ agents, byInstance: {}, byRole: {}, context: 'ctx' });
   expect(res.proposals.length === 0, 'sem provedor nao deveria haver proposta');
   expect(res.errors.length === 1, 'deveria reportar o agente sem provedor');
+}
+
+// 3f. resposta truncada: repete com o dobro do espaco e salva a proposta
+//
+// Bug real: maxTokens=900 cortava o JSON no meio (finish_reason "length") e o
+// agente virava "resposta nao e um objeto" — 3 de 7 agentes perdidos.
+{
+  const agents = [{ id: 'coder-1', name: 'Caio', role: 'coder' }];
+  let chamadas = 0;
+
+  const limiter = new Semaphore(4, 'F');
+  const byInstance = {
+    'coder-1': {
+      key: 'fake',
+      label: 'F',
+      model: 'm',
+      providerKey: 'fake',
+      role: 'coder-1',
+      limiter,
+      async chat({ maxTokens }) {
+        chamadas += 1;
+        // primeira chamada: cortada. segunda: completa.
+        if (chamadas === 1) {
+          return {
+            text: '{"title":"proposta cortada no me',
+            toolCalls: [],
+            finishReason: 'length',
+            usage: { in: 10, out: 5 },
+          };
+        }
+        return {
+          text: proposalJson('Proposta salva na segunda tentativa'),
+          toolCalls: [],
+          finishReason: 'stop',
+          usage: { in: 10, out: 5 },
+        };
+      },
+    },
+  };
+
+  const res = await runMeeting({ agents, byInstance, context: 'ctx', maxTokens: 900 });
+
+  expect(chamadas === 2, `deveria tentar 2 vezes, tentou ${chamadas}`);
+  expect(res.proposals.length === 1, `deveria salvar a proposta: ${JSON.stringify(res.errors)}`);
+  expect(res.proposals[0].title.includes('segunda tentativa'), 'deveria usar a resposta completa');
+}
+
+// 3g. truncada duas vezes: erro claro, nao "resposta nao e um objeto"
+{
+  const agents = [{ id: 'coder-1', name: 'Caio', role: 'coder' }];
+  const limiter = new Semaphore(4, 'F');
+  const byInstance = {
+    'coder-1': {
+      key: 'fake',
+      label: 'F',
+      model: 'm',
+      providerKey: 'fake',
+      role: 'coder-1',
+      limiter,
+      async chat() {
+        return { text: '{"title":"cortado', toolCalls: [], finishReason: 'length', usage: { in: 10, out: 5 } };
+      },
+    },
+  };
+
+  const res = await runMeeting({ agents, byInstance, context: 'ctx' });
+  expect(res.proposals.length === 0, 'nao deveria ter proposta');
+  expect(
+    /truncada/.test(res.errors[0]?.problem || ''),
+    `o erro deveria citar truncamento: ${res.errors[0]?.problem}`,
+  );
+}
+
+// 3h. sem JSON: erro diz "nao devolveu JSON"
+{
+  const agents = [{ id: 'coder-1', name: 'Caio', role: 'coder' }];
+  const { byInstance } = fakeProviders({ 'coder-1': 'Desculpe, nao posso ajudar com isso.' });
+  const res = await runMeeting({ agents, byInstance, context: 'ctx' });
+  expect(res.proposals.length === 0, 'sem JSON nao deveria ter proposta');
+  expect(
+    /JSON/.test(res.errors[0]?.problem || ''),
+    `o erro deveria falar de JSON: ${res.errors[0]?.problem}`,
+  );
 }
 
 // ===========================================================================

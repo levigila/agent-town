@@ -127,6 +127,26 @@ export function loadConfig() {
 }
 
 /**
+ * Nome próprio de cada agente, igual ao do frontend (public/js/config.js).
+ *
+ * Duplicado de propósito: o servidor não importa código de `public/`. Se mudar
+ * aqui, mude lá também — o teste test-office confere que os dois batem.
+ */
+export const AGENT_NAMES = {
+  planner: ['Ada'],
+  researcher: ['Rita', 'Rui'],
+  coder: ['Caio', 'Clara'],
+  reviewer: ['Vera', 'Vito'],
+};
+
+/** Nome próprio do agente; cai no nome do papel se a lista for curta. */
+export function nameForRole(role, index = 0) {
+  const list = AGENT_NAMES[role];
+  if (!list || !list.length) return null;
+  return list[index % list.length];
+}
+
+/**
  * Cria as instâncias de agente.
  *
  * O Planner é único (é o orquestrador, não faz sentido ter dois decidindo).
@@ -145,7 +165,7 @@ export function buildAgentInstances(roles, perRole = 2) {
     instances.push({
       id: 'planner',
       role: 'planner',
-      name: planner.name,
+      name: nameForRole('planner', 0) || planner.name,
       roleName: planner.role,
       index: 0,
       modelRef: planner.modelRef,
@@ -160,7 +180,9 @@ export function buildAgentInstances(roles, perRole = 2) {
       instances.push({
         id,
         role: role.id,
-        name: perRole > 1 ? `${role.name} ${i + 1}` : role.name,
+        // Nome próprio (Caio, Clara...) em vez de "Coder 1": é o que aparece
+        // acima da cabeça no cenário e no card de propostas.
+        name: nameForRole(role.id, i) || (perRole > 1 ? `${role.name} ${i + 1}` : role.name),
         roleName: role.role,
         index: i,
         modelRef: role.modelRef,

@@ -210,6 +210,37 @@ const expect = (cond, msg) => {
 }
 
 // ===========================================================================
+// 8. Os nomes do frontend e do backend precisam bater
+//
+// O servidor nao importa codigo de public/, entao AGENT_NAMES existe nos dois
+// lugares. Se divergirem, o card de propostas mostra "Coder 1" enquanto o
+// cenario mostra "Caio".
+// ===========================================================================
+{
+  const { AGENT_NAMES: serverNames, buildAgentInstances } = await import('../src/config.mjs');
+
+  for (const role of Object.keys(serverNames)) {
+    const doFrontend = AGENT_LIST.filter((a) => a.role === role).map((a) => a.name);
+    const doServidor = serverNames[role];
+    expect(
+      JSON.stringify(doFrontend) === JSON.stringify(doServidor),
+      `nomes divergem em "${role}": frontend=[${doFrontend}] servidor=[${doServidor}]`,
+    );
+  }
+
+  // buildAgentInstances usa os nomes proprios, nao "Coder 1"
+  const roles = {
+    planner: { id: 'planner', name: 'P', role: 'O', modelRef: null },
+    coder: { id: 'coder', name: 'C', role: 'I', modelRef: null },
+  };
+  const inst = buildAgentInstances(roles, 2);
+  expect(inst.find((a) => a.id === 'coder-1')?.name === 'Caio', 'coder-1 deveria se chamar Caio');
+  expect(inst.find((a) => a.id === 'coder-2')?.name === 'Clara', 'coder-2 deveria se chamar Clara');
+  expect(inst.find((a) => a.id === 'planner')?.name === 'Ada', 'planner deveria se chamar Ada');
+}
+
+
+// ===========================================================================
 if (problems.length) {
   console.error(`${problems.length} problema(s):`);
   for (const p of problems) console.error(' - ' + p);

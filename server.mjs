@@ -18,7 +18,7 @@ import { loadEnv } from './src/env.mjs';
 import { loadConfig, validateRealMode } from './src/config.mjs';
 import { browseDirectory, projectContext } from './src/project.mjs';
 import { loadOpenCodeAgents } from './src/opencode.mjs';
-import { runMeeting, composeTask } from './src/brainstorm.mjs';
+import { runMeeting, composeTask, contextToText } from './src/brainstorm.mjs';
 import { createProvidersForRoles } from './src/providers/index.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -160,13 +160,22 @@ function startMeeting({ task = '' } = {}) {
   (async () => {
     try {
       const { byInstance, byRole } = getMeetingProviders();
-      const context = await projectContext(ROOT).catch(() => '');
+      const tree = await projectContext(ROOT).catch(() => null);
+      const treeText = contextToText(tree);
+      const knownFiles = Array.isArray(tree?.files)
+        ? tree.files
+        : String(treeText)
+            .split('\n')
+            .map((l) => l.trim())
+            .filter((l) => l && !l.endsWith('/'));
 
       const result = await runMeeting({
         agents: config.agents || [],
         byInstance,
         byRole,
-        context: [task ? `Pedido do usuario: ${task}` : '', context].filter(Boolean).join('\n\n'),
+        context: [task ? `Pedido do usuario: ${task}` : '', treeText].filter(Boolean).join('\n\n'),
+        fileTree: treeText,
+        knownFiles,
         signal: meetingAbort.signal,
         emit: (type, agentId, payload) =>
           broadcast({ type, agentId, ts: Date.now(), ...(payload || {}) }),
