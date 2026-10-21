@@ -1,7 +1,7 @@
-// Cenario: piso, parede, mesas, mesa de reuniao e props.
+﻿// Cenario: piso, parede, mesas, mesa de reuniao e props.
 // Tudo desenhado em retangulos, no espaco logico 480x304.
 
-import { WORLD, WALL_H, DESK, MEETING, floorTheme } from './config.js';
+import { WORLD, WALL_H, DESK, MEETING, MEETING_SPOTS, MEETING_BUTTON, seatOf, floorTheme } from './config.js';
 
 const R = (ctx, x, y, w, h, c) => {
   ctx.fillStyle = c;
@@ -191,12 +191,15 @@ export function drawRug(ctx) {
   R(ctx, x - rx - 14, y - ry - 4, (rx + 14) * 2, (ry + 4) * 2, COL.rug2);
 }
 
-export function drawMeeting(ctx, now) {
+export function drawMeeting(ctx, now, state = {}) {
   const { x, y, rx, ry } = MEETING;
+  const called = !!state.called;
 
-  // cadeiras atras
-  R(ctx, x - 46, y - 34, 16, 10, COL.metal);
-  R(ctx, x + 30, y - 34, 16, 10, COL.metal);
+  // Cadeiras: as de tras sao desenhadas antes do tampo (ficam atras);
+  // as das pontas e da frente, depois (ficam na frente).
+  for (const spot of MEETING_SPOTS) {
+    if (spot.side === 'back') chair(ctx, spot, false);
+  }
 
   // tampo
   ctx.fillStyle = '#5c4630';
@@ -208,19 +211,23 @@ export function drawMeeting(ctx, now) {
   ctx.ellipse(x, y - 2, rx - 3, ry - 3, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // papeis e caneca
-  R(ctx, x - 20, y - 8, 14, 10, '#d9dee8');
-  R(ctx, x - 18, y - 6, 10, 1, '#9aa3b5');
-  R(ctx, x - 18, y - 3, 8, 1, '#9aa3b5');
-  R(ctx, x + 12, y - 6, 5, 5, '#e35d5d');
-  R(ctx, x + 17, y - 5, 2, 3, '#e35d5d');
+  // papeis e caneca (nas laterais, para nao ficar sob o botao)
+  R(ctx, x - 34, y - 9, 13, 9, '#d9dee8');
+  R(ctx, x - 32, y - 7, 9, 1, '#9aa3b5');
+  R(ctx, x - 32, y - 4, 7, 1, '#9aa3b5');
+  R(ctx, x + 24, y - 9, 5, 5, '#e35d5d');
+  R(ctx, x + 29, y - 8, 2, 3, '#e35d5d');
 
-  // cadeiras da frente
-  R(ctx, x - 46, y + 26, 16, 10, COL.metalDark);
-  R(ctx, x + 30, y + 26, 16, 10, COL.metalDark);
+  // botao de chamar a reuniao
+  drawMeetingButton(ctx, now, state);
 
-  // brilho sutil de atividade
-  const g = 0.04 + Math.sin(now / 1400) * 0.02;
+  // cadeiras nas pontas e na frente
+  for (const spot of MEETING_SPOTS) {
+    if (spot.side !== 'back') chair(ctx, spot, spot.side === 'front');
+  }
+
+  // brilho sutil de atividade (mais forte com a reuniao aberta)
+  const g = (called ? 0.1 : 0.04) + Math.sin(now / 1400) * 0.02;
   ctx.fillStyle = `rgba(120,200,255,${g.toFixed(3)})`;
   ctx.beginPath();
   ctx.ellipse(x, y, rx + 6, ry + 6, 0, 0, Math.PI * 2);
@@ -228,27 +235,73 @@ export function drawMeeting(ctx, now) {
 }
 
 /**
- * @param seated true quando o dono esta sentado trabalhando (liga a tela)
+ * Uma cadeira. As de tras mostram o encosto acima do assento (o agente senta
+ * na frente delas); as da frente mostram o encosto abaixo, senao ele ficaria
+ * na frente do sprite.
  */
-export function drawDesk(ctx, index, seated, accent, now) {
+function chair(ctx, spot, front) {
+  const w = 16;
+  const h = 9;
+  const cx = Math.round(spot.x - w / 2);
+  const cy = Math.round(spot.y - h + 2);
+
+  // assento
+  R(ctx, cx, cy, w, h, front ? COL.metalDark : COL.metal);
+  R(ctx, cx, cy, w, 2, '#39415a');
+
+  if (front) {
+    R(ctx, cx + 1, cy + h, w - 2, 3, '#232a38');
+  } else {
+    R(ctx, cx + 1, cy - 5, w - 2, 5, '#323a4d');
+  }
+}
+
+/**
+ * Botao sobre o tampo da mesa. E o unico controle clicavel dentro do cenario:
+ * chama todo mundo para sentar e pensar em melhorias.
+ */
+function drawMeetingButton(ctx, now, state) {
+  const { x, y, w, h } = MEETING_BUTTON;
+  const called = !!state.called;
+  const busy = !!state.busy;
+
+  const accent = called ? '#f5a623' : '#4be0c8';
+  const base = called ? '#3a2a12' : '#0f3536';
+  const border = called ? '#7a5a1a' : '#1d5f60';
+
+  // sombra
+  R(ctx, x, y + 1, w, h, 'rgba(0,0,0,0.35)');
+
+  // corpo
+  R(ctx, x, y, w, h, border);
+  R(ctx, x + 1, y + 1, w - 2, h - 2, base);
+
+  // pulso enquanto a reuniao esta aberta
+  if (called && !busy) {
+    const pulse = 0.2 + Math.abs(Math.sin(now / 420)) * 0.3;
+    R(ctx, x + 1, y + 1, w - 2, h - 2, `rgba(245,166,35,${pulse.toFixed(3)})`);
+  }
+
+  const label = busy ? 'pensando...' : called ? 'encerrar' : 'chamar todos';
+  T(ctx, label, x + w / 2, y + h / 2 + 1, accent, '7px monospace', 'center');
+}
+
+/**
+ * Mesa com um posto por agente.
+ *
+ * REGRA: nada aqui pode subir acima do tampo (`DESK.top`). A mesa e desenhada
+ * DEPOIS dos agentes, entao qualquer prop mais alto fica na frente do sprite.
+ * Era exatamente o bug do monitor antigo: ele ocupava y 72..92 e cobria o
+ * rosto de researcher-1, coder-1 e reviewer-1 â€” os agentes do lugar 0 das
+ * mesas compartilhadas, que ficavam invisiveis atras dele.
+ *
+ * @param {object[]} owners um por agente desta mesa: { slot, slots, on }
+ * @param {string} accent cor de destaque quando o agente esta ativo
+ */
+export function drawDesk(ctx, index, owners, accent, now) {
   const x = DESK.xs[index];
   const top = DESK.top;
   const w = DESK.w;
-
-  // monitor
-  const mx = x + 5;
-  const my = top - 20;
-  R(ctx, mx, my, 30, 20, COL.metalDark);
-  const screenOn = seated;
-  R(ctx, mx + 3, my + 3, 24, 13, screenOn ? accent : '#20303c');
-  if (screenOn) {
-    const flicker = 0.16 + Math.abs(Math.sin(now / 260)) * 0.12;
-    R(ctx, mx + 3, my + 3, 24, 13, `rgba(255,255,255,${flicker.toFixed(3)})`);
-    R(ctx, mx + 6, my + 6, 12, 1, 'rgba(0,0,0,0.35)');
-    R(ctx, mx + 6, my + 9, 16, 1, 'rgba(0,0,0,0.28)');
-    R(ctx, mx + 6, my + 12, 9, 1, 'rgba(0,0,0,0.28)');
-  }
-  R(ctx, mx + 12, my + 20, 6, 3, COL.metal);
 
   // tampo
   R(ctx, x, top, w, 6, COL.deskTop);
@@ -260,14 +313,20 @@ export function drawDesk(ctx, index, seated, accent, now) {
   R(ctx, x + 4, top + 21, 4, 7, COL.deskLeg);
   R(ctx, x + w - 8, top + 21, 4, 7, COL.deskLeg);
 
-  // teclado + mouse
-  R(ctx, x + 34, top + 1, 22, 4, COL.metal);
-  R(ctx, x + 36, top + 2, 18, 1, '#3a4257');
-  R(ctx, x + 59, top + 2, 3, 3, COL.metal);
+  // um posto por agente: teclado + mouse apoiados na superficie, sem nada na
+  // altura do rosto
+  for (const owner of owners) {
+    const cx = seatOf(index, owner.slot, owner.slots).x;
+    R(ctx, cx - 9, top + 1, 16, 3, COL.metal);
+    R(ctx, cx - 8, top + 2, 14, 1, owner.on ? accent : '#3a4257');
+    R(ctx, cx + 9, top + 2, 3, 3, COL.metal);
+  }
 
-  // caneca
-  R(ctx, x + 10, top + 1, 5, 4, '#c9553f');
-  R(ctx, x + 15, top + 2, 2, 2, '#c9553f');
+  // caneca no canto esquerdo
+  R(ctx, x + 3, top + 1, 5, 4, '#c9553f');
+  R(ctx, x + 8, top + 2, 2, 2, '#c9553f');
+
+  void now;
 }
 
 export function drawCoffeeCorner(ctx) {

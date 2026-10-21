@@ -48,7 +48,8 @@
           <canvas id="overlay"></canvas>
         </div>
         <p class="stage-hint">
-          clique em um agente para inspecionar · o log mostra cada passo real
+          clique em um agente para inspecionar · clique em <strong>chamar todos</strong> na mesa de
+          reunião para os agentes proporem melhorias
         </p>
       </section>
 
@@ -116,6 +117,20 @@
             <span class="plan-meta" id="diffMeta"></span>
           </header>
           <div class="diff-body" id="diffBody"></div>
+        </section>
+
+        <section class="panel panel-meeting" id="meetingPanel" hidden>
+          <header class="panel-head">
+            <h2 class="panel-title">Reunião</h2>
+            <span class="plan-meta" id="meetingMeta"></span>
+          </header>
+          <ol class="proposal-list" id="meetingList"></ol>
+          <div class="meeting-foot" id="meetingFoot">
+            <button class="btn btn-primary btn-small" id="btnMeetingApprove" type="button" disabled>
+              selecione as propostas
+            </button>
+            <button class="ghost" id="btnMeetingStop" type="button">fechar</button>
+          </div>
         </section>
 
         <section class="panel panel-agents">

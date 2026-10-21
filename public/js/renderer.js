@@ -1,7 +1,7 @@
 // Renderer: desenha o mundo num canvas de baixa resolucao (pixel art de verdade)
 // e a UI do mundo (nomes, baloes, selecao) num overlay em alta resolucao.
 
-import { WORLD, DESK, MEETING, AGENT_LIST } from './config.js';
+import { WORLD, DESK, MEETING, AGENT_LIST, hitMeetingButton } from './config.js';
 import { drawAgent } from './sprite.js';
 import * as W from './world.js';
 
@@ -68,6 +68,18 @@ export class Renderer {
     this.wctx.imageSmoothingEnabled = false;
     this.world.width = WORLD.w;
     this.world.height = WORLD.h;
+
+    // Estado da reuniao, controlado pelo main.js.
+    this.meeting = { called: false, busy: false };
+  }
+
+  /** O ponto (coordenadas de tela) esta sobre o botao da mesa de reuniao? */
+  hitMeeting(clientX, clientY) {
+    const rect = this.overlay.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+    const wx = (clientX - rect.left) / (this.k || 1);
+    const wy = (clientY - rect.top) / (this.k || 1);
+    return hitMeetingButton(wx, wy);
   }
 
   resize() {
@@ -134,15 +146,18 @@ export class Renderer {
 
     // mesas (desenhadas na frente de quem esta sentado)
     // Cada mesa pode ter mais de um agente (duas instancias da mesma funcao),
-    // entao a mesa acende se QUALQUER um dos seus ocupantes estiver ativo.
+    // entao cada um ganha o seu proprio posto (teclado + mouse).
     for (let i = 0; i < DESK.xs.length; i++) {
-      const owners = AGENT_LIST.filter((a) => a.desk === i);
-      const on = owners.some((o) => {
+      const owners = AGENT_LIST.filter((a) => a.desk === i).map((o) => {
         const ag = this.agents[o.id];
-        return ag && (ag.state === 'working' || ag.state === 'thinking');
+        return {
+          slot: o.slot,
+          slots: o.slots,
+          on: !!ag && (ag.state === 'working' || ag.state === 'thinking'),
+        };
       });
-      const accent = owners[0] ? owners[0].accent : '#4be0c8';
-      W.drawDesk(ctx, i, on, accent, now);
+      const accent = AGENT_LIST.find((a) => a.desk === i)?.accent || '#4be0c8';
+      W.drawDesk(ctx, i, owners, accent, now);
     }
 
     // agentes no corredor (atras da mesa de reuniao)
@@ -151,7 +166,7 @@ export class Renderer {
       .sort((a, b) => a.pos.y - b.pos.y)
       .forEach((a) => drawAgent(ctx, a, now));
 
-    W.drawMeeting(ctx, now);
+    W.drawMeeting(ctx, now, this.meeting);
     W.drawCoffeeCorner(ctx);
     W.drawCouch(ctx);
 
@@ -175,24 +190,38 @@ export class Renderer {
       const headTop = sy - 26 * this.k;
       const isSel = this.selected === a.def.id;
 
-      // nome + ponto de estado
+      // Nome proprio acima da cabeca. O papel vai embaixo, menor, para nao
+      // precisar decorar quem e "coder-2".
       ctx.font = MONO;
       ctx.textAlign = 'center';
       const label = a.def.name;
       const tw = ctx.measureText(label).width;
       const nameY = headTop - 6;
 
-      ctx.fillStyle = 'rgba(8,10,14,0.62)';
-      roundRect(ctx, sx - tw / 2 - 6, nameY - 10, tw + 12, 13, 6);
+      ctx.fillStyle = 'rgba(8,10,14,0.72)';
+      roundRect(ctx, sx - tw / 2 - 7, nameY - 11, tw + 14, 15, 7);
       ctx.fill();
 
-      ctx.fillStyle = isSel ? a.def.accent : 'rgba(214,222,236,0.82)';
+      ctx.fillStyle = isSel ? a.def.accent : 'rgba(228,235,246,0.92)';
       ctx.fillText(label, sx, nameY);
 
       ctx.fillStyle = STATE_DOT[a.state] || '#5b6478';
       ctx.beginPath();
-      ctx.arc(sx - tw / 2 - 1, nameY - 4, 2, 0, Math.PI * 2);
+      ctx.arc(sx - tw / 2 - 2, nameY - 5, 2, 0, Math.PI * 2);
       ctx.fill();
+
+      // papel, em letra menor, logo abaixo do nome
+      const role = a.def.roleName || '';
+      if (role) {
+        ctx.font = '9px ui-monospace, "Cascadia Mono", Consolas, monospace';
+        const rw = ctx.measureText(role).width;
+        ctx.fillStyle = 'rgba(8,10,14,0.55)';
+        roundRect(ctx, sx - rw / 2 - 5, nameY + 2, rw + 10, 11, 5);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(160,170,190,0.72)';
+        ctx.fillText(role, sx, nameY + 10);
+        ctx.font = MONO;
+      }
 
       if (isSel) {
         ctx.strokeStyle = a.def.accent;
@@ -207,7 +236,7 @@ export class Renderer {
       // balao
       if (a.bubble) {
         const tone = TONES[a.bubble.tone] || TONES.talk;
-        this.drawBubble(ctx, sx, nameY - 16, a.bubble.text, tone, a.def.accent);
+        this.drawBubble(ctx, sx, nameY - 18, a.bubble.text, tone, a.def.accent);
       }
     }
   }

@@ -18,6 +18,7 @@ export class AgentView {
     this.current = null;
     this.bubble = null;
     this.flash = 0;
+    this.inMeeting = false;
   }
 
   // -- API -------------------------------------------------------------------
@@ -29,6 +30,7 @@ export class AgentView {
     this.state = 'idle';
     this.restState = 'idle';
     this.facing = 1;
+    this.inMeeting = false;
     this.pos = { ...this.home };
   }
 
@@ -63,6 +65,44 @@ export class AgentView {
     this.facing = other.pos.x < this.pos.x ? -1 : 1;
   }
 
+  /**
+   * Vai para o seu lugar na mesa de reuniao e senta.
+   *
+   * O lugar e fixo por agente (def.meetSpot), entao a cena nao embaralha entre
+   * uma reuniao e outra. Limpa a fila antes: se o agente estava no meio de uma
+   * conversa, ele vai direto para a mesa em vez de terminar o trajeto antigo.
+   */
+  goMeet() {
+    const spot = this.def.meetSpot;
+    if (!spot) return;
+
+    this.queue.length = 0;
+    this.current = null;
+    this.inMeeting = true;
+
+    // dois trechos para nao atravessar a mesa: alinha em x, depois vai em y.
+    this._push({ kind: 'move', x: spot.x, y: this.pos.y });
+    this._push({ kind: 'move', x: spot.x, y: spot.y });
+    this._push({ kind: 'state', state: 'thinking' });
+  }
+
+  /** Levanta da mesa e volta para a propria estacao. */
+  leaveMeeting() {
+    if (!this.inMeeting) return;
+    this.inMeeting = false;
+    this.queue.length = 0;
+    this.current = null;
+    this.state = 'idle';
+    this._autoReturn();
+  }
+
+  /** O agente esta no seu lugar da mesa? (para o anel de destaque) */
+  atMeetingSpot() {
+    const spot = this.def.meetSpot;
+    if (!spot) return false;
+    return Math.hypot(this.pos.x - spot.x, this.pos.y - spot.y) < 2;
+  }
+
   // -- ciclo de vida ---------------------------------------------------------
 
   _push(action) {
@@ -75,7 +115,9 @@ export class AgentView {
   }
 
   // Agente ocioso nunca fica largado no meio da sala: volta pra mesa.
+  // Excecao: na reuniao ele fica sentado onde esta.
   _autoReturn() {
+    if (this.inMeeting) return;
     this._push({ kind: 'move', x: this.home.x, y: this.pos.y });
     this._push({ kind: 'move', x: this.home.x, y: this.home.y });
     this._push({ kind: 'state', state: 'working' });

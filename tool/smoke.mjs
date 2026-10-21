@@ -1,13 +1,16 @@
 // Smoke test sem navegador: stuba o canvas 2d, roda a maquina de estados
 // e o render path inteiro, e falha em qualquer NaN/Infinity nas coordenadas.
 
-import { AGENT_DEFS } from '../public/js/config.js';
+import { AGENT_DEFS, MEETING_BUTTON } from '../public/js/config.js';
 import { createAgents } from '../public/js/agent.js';
 import { applyEvent, applySnapshot, resetRoom } from '../public/js/handlers.js';
 import { Renderer } from '../public/js/renderer.js';
 
 const problems = [];
 const stats = { fillRect: 0, fillText: 0, ellipse: 0, frames: 0 };
+
+/** Todo texto desenhado, para conferir que os nomes aparecem no overlay. */
+const drawnTexts = new Set();
 
 const checkNums = (where, ...vals) => {
   for (const v of vals) {
@@ -58,6 +61,7 @@ function makeCtx() {
     fillText(t, x, y) {
       checkNums('fillText', x, y);
       stats.fillText += 1;
+      drawnTexts.add(String(t));
     },
     setTransform() {},
     save() {},
@@ -175,8 +179,78 @@ applySnapshot(agents, [
 ], ui);
 renderer.draw(t);
 
+// --- reuniao: todos andam ate a mesa e sentam ------------------------------
+{
+  const antes = Object.fromEntries(Object.values(agents).map((a) => [a.def.id, { ...a.pos }]));
+
+  for (const a of Object.values(agents)) a.goMeet();
+
+  // tempo suficiente para atravessar a sala: o agente mais distante sai de
+  // x~446 (mesa do reviewer) ate x=240, ~206px, mais 152px em y. A 75px/s
+  // isso da ~4,8s, entao 400 frames (6,7s) dao folga.
+  for (let i = 0; i < 400; i++) {
+    t += 16.7;
+    for (const a of Object.values(agents)) a.update(16.7, t);
+  }
+  renderer.meeting = { called: true, busy: false };
+  renderer.draw(t);
+
+  for (const a of Object.values(agents)) {
+    if (!a.inMeeting) problems.push(`${a.def.id} nao entrou no estado de reuniao`);
+    if (!a.atMeetingSpot()) {
+      const s = a.def.meetSpot;
+      const d = Math.hypot(a.pos.x - s.x, a.pos.y - s.y);
+      problems.push(`${a.def.id} nao chegou ao lugar da mesa (dist ${d.toFixed(1)})`);
+    }
+  }
+
+  // os lugares sao distintos: dois agentes nao podem ocupar o mesmo ponto
+  const lugares = Object.values(agents).map((a) => `${Math.round(a.pos.x)},${Math.round(a.pos.y)}`);
+  if (new Set(lugares).size !== lugares.length) {
+    problems.push(`dois agentes no mesmo lugar da mesa: ${lugares.join(' | ')}`);
+  }
+
+  // a reuniao mudou alguem de lugar (prova que goMeet saiu do lugar)
+  const mudou = Object.values(agents).some((a) => {
+    const p = antes[a.def.id];
+    return Math.hypot(a.pos.x - p.x, a.pos.y - p.y) > 2;
+  });
+  if (!mudou) problems.push('goMeet() nao moveu nenhum agente');
+
+  // botao da mesa responde ao clique
+  const botaoX = (MEETING_BUTTON.x + MEETING_BUTTON.w / 2) * renderer.k;
+  const botaoY = (MEETING_BUTTON.y + MEETING_BUTTON.h / 2) * renderer.k;
+  if (!renderer.hitMeeting(botaoX, botaoY)) problems.push('hitMeeting() nao reconheceu o botao da mesa');
+  if (renderer.hitMeeting(0, 0)) problems.push('hitMeeting() reconheceu clique no canto vazio');
+
+  // desenhar com a reuniao aberta e com o "pensando" nao pode quebrar
+  renderer.meeting = { called: true, busy: true };
+  renderer.draw(t);
+
+  // e sair da reuniao devolve todos para a mesa de trabalho
+  for (const a of Object.values(agents)) a.leaveMeeting();
+  for (let i = 0; i < 400; i++) {
+    t += 16.7;
+    for (const a of Object.values(agents)) a.update(16.7, t);
+  }
+  renderer.meeting = { called: false, busy: false };
+  renderer.draw(t);
+
+  const fora = Object.values(agents).filter((a) => a.inMeeting);
+  if (fora.length) problems.push(`${fora.length} agente(s) continuaram em reuniao apos leaveMeeting()`);
+}
+
 if (stats.fillRect < 5000) problems.push(`poucas primitivas desenhadas (${stats.fillRect}) — o render pode estar vazio`);
 if (stats.fillText < 10) problems.push(`poucos textos desenhados (${stats.fillText})`);
+
+// Os nomes proprios precisam aparecer no overlay (acima da cabeca).
+{
+  const nomes = AGENT_DEFS.map((d) => d.name);
+  const desenhados = [...drawnTexts];
+  for (const nome of nomes) {
+    if (!desenhados.includes(nome)) problems.push(`nome "${nome}" nao foi desenhado no overlay`);
+  }
+}
 
 console.log(
   `frames=${stats.frames} fillRect=${stats.fillRect} ellipse=${stats.ellipse} fillText=${stats.fillText} k=${renderer.k.toFixed(2)}`,

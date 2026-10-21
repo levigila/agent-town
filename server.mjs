@@ -16,8 +16,10 @@ import { Simulator } from './src/simulator.mjs';
 import { Orchestrator } from './src/orchestrator.mjs';
 import { loadEnv } from './src/env.mjs';
 import { loadConfig, validateRealMode } from './src/config.mjs';
-import { browseDirectory } from './src/project.mjs';
+import { browseDirectory, projectContext } from './src/project.mjs';
 import { loadOpenCodeAgents } from './src/opencode.mjs';
+import { runMeeting, composeTask } from './src/brainstorm.mjs';
+import { createProvidersForRoles } from './src/providers/index.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -88,6 +90,149 @@ if (config.mode === 'real') {
 }
 
 // ---------------------------------------------------------------------------
+// Reuniao de melhoria
+//
+// Os agentes se sentam na mesa e cada um propoe UMA melhoria para o proprio
+// agent-town. Nada e implementado sem aprovacao do usuario no card da tela.
+// O alvo e sempre a pasta do servidor: o escritorio E o agent-town.
+// ---------------------------------------------------------------------------
+
+const meeting = {
+  active: false,
+  busy: false,
+  proposals: [],
+  errors: [],
+  usage: { in: 0, out: 0 },
+  startedAt: null,
+  finishedAt: null,
+  target: ROOT,
+  error: null,
+};
+
+let meetingProviders = null;
+let meetingAbort = null;
+
+/** Providers da reuniao (criados uma vez; nunca rodam junto com uma execucao). */
+function getMeetingProviders() {
+  if (!meetingProviders) meetingProviders = createProvidersForRoles(config);
+  return meetingProviders;
+}
+
+function publicMeeting() {
+  return {
+    active: meeting.active,
+    busy: meeting.busy,
+    proposals: meeting.proposals,
+    errors: meeting.errors,
+    usage: meeting.usage,
+    startedAt: meeting.startedAt,
+    finishedAt: meeting.finishedAt,
+    target: meeting.target,
+    error: meeting.error,
+  };
+}
+
+/**
+ * Comeca a reuniao em segundo plano.
+ * Os eventos chegam por SSE (meeting_started, proposal, meeting_done), entao a
+ * requisicao HTTP nao precisa esperar os modelos responderem.
+ */
+function startMeeting({ task = '' } = {}) {
+  if (meeting.busy) return { ok: false, error: 'a reuniao ja esta acontecendo' };
+  if (runner.running) return { ok: false, error: 'pare a execucao antes de abrir a reuniao' };
+  if (modeInfo.mode !== 'real') {
+    return { ok: false, error: 'a reuniao precisa do modo real (ORCHESTRATOR=real)' };
+  }
+
+  meeting.busy = true;
+  meeting.active = true;
+  meeting.proposals = [];
+  meeting.errors = [];
+  meeting.usage = { in: 0, out: 0 };
+  meeting.startedAt = Date.now();
+  meeting.finishedAt = null;
+  meeting.error = null;
+
+  meetingAbort = new AbortController();
+
+  broadcast({ type: 'meeting_started', agentId: null, ts: Date.now(), agents: config.agents || [] });
+
+  (async () => {
+    try {
+      const { byInstance, byRole } = getMeetingProviders();
+      const context = await projectContext(ROOT).catch(() => '');
+
+      const result = await runMeeting({
+        agents: config.agents || [],
+        byInstance,
+        byRole,
+        context: [task ? `Pedido do usuario: ${task}` : '', context].filter(Boolean).join('\n\n'),
+        signal: meetingAbort.signal,
+        emit: (type, agentId, payload) =>
+          broadcast({ type, agentId, ts: Date.now(), ...(payload || {}) }),
+      });
+
+      meeting.proposals = result.proposals.map((p) => ({ ...p, status: 'pending' }));
+      meeting.errors = result.errors;
+      meeting.usage = result.usage;
+      meeting.error = result.proposals.length ? null : 'nenhum agente devolveu proposta valida';
+    } catch (err) {
+      meeting.error = err.message;
+      broadcast({ type: 'agent_error', agentId: null, ts: Date.now(), text: `reuniao: ${err.message}` });
+    } finally {
+      meeting.busy = false;
+      meeting.finishedAt = Date.now();
+      meetingAbort = null;
+      broadcast({ type: 'meeting_done', agentId: null, ts: Date.now(), meeting: publicMeeting() });
+    }
+  })();
+
+  return { ok: true, meeting: publicMeeting() };
+}
+
+function stopMeeting() {
+  meetingAbort?.abort();
+  meetingAbort = null;
+  meeting.active = false;
+  meeting.busy = false;
+  meeting.proposals = [];
+  meeting.errors = [];
+  meeting.error = null;
+  meeting.startedAt = null;
+  meeting.finishedAt = null;
+  broadcast({ type: 'meeting_done', agentId: null, ts: Date.now(), meeting: publicMeeting() });
+  return { ok: true, meeting: publicMeeting() };
+}
+
+/**
+ * Aprova e/ou descarta propostas.
+ * Aprovadas viram uma execucao real (modo projeto, na propria pasta do servidor).
+ */
+function decideMeeting({ approve = [], dismiss = [] } = {}) {
+  const approveIds = new Set(Array.isArray(approve) ? approve : []);
+  const dismissIds = new Set(Array.isArray(dismiss) ? dismiss : []);
+
+  for (const p of meeting.proposals) {
+    if (approveIds.has(p.id)) p.status = 'approved';
+    else if (dismissIds.has(p.id)) p.status = 'dismissed';
+  }
+
+  const approved = meeting.proposals.filter((p) => p.status === 'approved');
+  if (!approved.length) {
+    return { ok: true, meeting: publicMeeting(), started: false };
+  }
+
+  if (runner.running) {
+    return { ok: false, error: 'ja existe uma execucao rodando', meeting: publicMeeting(), started: false };
+  }
+
+  const task = composeTask(approved);
+  const state = runner.start({ task, mode: 'project', projectPath: meeting.target, speed: 1 });
+
+  return { ok: true, meeting: publicMeeting(), started: true, task, run: state };
+}
+
+// ---------------------------------------------------------------------------
 // Helpers HTTP
 // ---------------------------------------------------------------------------
 
@@ -133,6 +278,7 @@ function handleEvents(req, res) {
       type: 'snapshot',
       events: history.slice(-150),
       state: { ...runner.getState(), mode: modeInfo.mode },
+      meeting: publicMeeting(),
     })}\n\n`,
   );
 
@@ -189,12 +335,46 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/events') return handleEvents(req, res);
 
     if (pathname === '/api/state') {
-      return sendJson(res, { ...runner.getState(), mode: modeInfo.mode, problems: modeInfo.problems });
+      return sendJson(res, {
+        ...runner.getState(),
+        mode: modeInfo.mode,
+        problems: modeInfo.problems,
+        meeting: publicMeeting(),
+      });
+    }
+
+    // -- reuniao de melhoria --------------------------------------------------
+
+    if (pathname === '/api/meeting' && req.method === 'GET') {
+      return sendJson(res, publicMeeting());
+    }
+
+    if (pathname === '/api/meeting/start' && req.method === 'POST') {
+      const body = await readJson(req);
+      const result = startMeeting({ task: body.task || '' });
+      return sendJson(res, result, result.ok ? 202 : 409);
+    }
+
+    if (pathname === '/api/meeting/stop' && req.method === 'POST') {
+      return sendJson(res, stopMeeting());
+    }
+
+    if (pathname === '/api/meeting/decide' && req.method === 'POST') {
+      const body = await readJson(req);
+      const result = decideMeeting({ approve: body.approve, dismiss: body.dismiss });
+      return sendJson(res, result, result.ok ? 200 : 409);
     }
 
     if (pathname === '/api/run' && req.method === 'POST') {
       const body = await readJson(req);
       if (runner.running) return sendJson(res, { ...runner.getState(), mode: modeInfo.mode }, 409);
+      if (meeting.busy) {
+        return sendJson(
+          res,
+          { ...runner.getState(), mode: modeInfo.mode, error: 'a reuniao esta rodando; aguarde as propostas' },
+          409,
+        );
+      }
       return sendJson(res, { ...runner.start(body), mode: modeInfo.mode });
     }
 

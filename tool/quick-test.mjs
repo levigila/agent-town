@@ -20,6 +20,10 @@ const CHECKS = [
   // preta sem nenhum agente. Agora os proprios agentes pegam isso no
   // run_tests, antes de commitar.
   ['test-ui.mjs', 'carrega a UI e aceita todos os eventos'],
+  // Geometria do cenario: nada da mesa pode cobrir o rosto do agente, e todo
+  // agente precisa ter nome e lugar na reuniao. Foi um monitor na frente do
+  // sprite que motivou este teste.
+  ['test-office.mjs', 'nomes, lugares e geometria dos moveis'],
 ];
 
 let failed = 0;

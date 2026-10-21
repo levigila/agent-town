@@ -28,12 +28,29 @@ export const standOf = (i, slot = 0, slots = 1) => ({
 
 // Mesa de reuniao no centro-baixo
 export const MEETING = { x: 240, y: 214, rx: 48, ry: 21 };
+
+// Oito lugares em volta da mesa: tres atras, dois nas pontas, tres na frente.
+// Da para sentar os 7 agentes sem sprite sobreposto.
 export const MEETING_SPOTS = [
-  { x: 240, y: 178 },
-  { x: 176, y: 214 },
-  { x: 304, y: 214 },
-  { x: 240, y: 250 },
+  { x: 208, y: 176, side: 'back' },
+  { x: 240, y: 173, side: 'back' },
+  { x: 272, y: 176, side: 'back' },
+  { x: 172, y: 214, side: 'left' },
+  { x: 308, y: 214, side: 'right' },
+  { x: 208, y: 252, side: 'front' },
+  { x: 240, y: 255, side: 'front' },
+  { x: 272, y: 252, side: 'front' },
 ];
+
+// Botao desenhado sobre o tampo da mesa: chama todo mundo para a reuniao.
+export const MEETING_BUTTON = { x: 212, y: 202, w: 56, h: 16 };
+
+/** O ponto (coordenadas do mundo) esta sobre o botao da mesa? */
+export const hitMeetingButton = (wx, wy) =>
+  wx >= MEETING_BUTTON.x &&
+  wx <= MEETING_BUTTON.x + MEETING_BUTTON.w &&
+  wy >= MEETING_BUTTON.y &&
+  wy <= MEETING_BUTTON.y + MEETING_BUTTON.h;
 
 // Helpers de cor. Ficam aqui em cima porque buildAgentList() ja os usa para
 // gerar a paleta das instancias 2, 3... (usar antes da definicao cairia em TDZ).
@@ -126,6 +143,29 @@ const ROLE_BASE = [
 ];
 
 /**
+ * Nome proprio de cada agente.
+ *
+ * O id tecnico ("coder-2") continua sendo a chave de tudo (eventos, API,
+ * guarda de escrita). O nome e so para a tela: fica acima da cabeca no
+ * cenario e no card do roster, porque "Coder 2" nao diz nada sobre quem e.
+ * A letra inicial segue a funcao (R de pesquisa, C de codigo, V de revisao),
+ * entao da para achar quem e sem decorar.
+ */
+const AGENT_NAMES = {
+  planner: ['Ada'],
+  researcher: ['Rita', 'Rui'],
+  coder: ['Caio', 'Clara'],
+  reviewer: ['Vera', 'Vito'],
+};
+
+/** Nome proprio do agente; cai no nome do papel se a lista for curta. */
+export function nameForRole(role, index = 0) {
+  const list = AGENT_NAMES[role];
+  if (!list || !list.length) return role;
+  return list[index % list.length];
+}
+
+/**
  * Monta a lista de agentes da cena.
  *
  * O Planner e unico (so existe um planejamento por execucao). Cada papel
@@ -142,12 +182,16 @@ function buildAgentList() {
     for (let i = 0; i < count; i++) {
       const id = count > 1 ? `${base.role}-${i + 1}` : base.role;
       const tint = count > 1 ? i * 0.1 : 0;
+      const person = nameForRole(base.role, i);
 
       list.push({
         id,
         role: base.role,
         index: i,
-        name: count > 1 ? `${base.name} ${i + 1}` : base.name,
+        // Nome proprio: e o que aparece acima da cabeca.
+        name: person,
+        // Rotulo completo para listas e logs: "Caio · Implementacao".
+        label: `${person} · ${base.roleName}`,
         roleName: base.roleName,
         model: base.model,
         accent: base.accent,
@@ -171,11 +215,14 @@ function buildAgentList() {
 export const AGENT_LIST = buildAgentList();
 
 // Lista enriquecida com as posicoes no mundo (o que o AgentView consome)
-export const AGENT_DEFS = AGENT_LIST.map((a) => ({
+export const AGENT_DEFS = AGENT_LIST.map((a, i) => ({
   ...a,
   seat: seatOf(a.desk, a.slot, a.slots),
   stand: standOf(a.desk, a.slot, a.slots),
   home: seatOf(a.desk, a.slot, a.slots),
+  // Lugar fixo na mesa de reuniao: cada agente sempre senta no mesmo lugar,
+  // entao a cena nao "embaralha" entre uma reuniao e outra.
+  meetSpot: MEETING_SPOTS[i % MEETING_SPOTS.length],
 }));
 
 export const AGENTS = Object.fromEntries(AGENT_DEFS.map((a) => [a.id, a]));

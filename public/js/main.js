@@ -20,7 +20,42 @@ const ui = new UI({
   onStop: () => post('/api/stop', {}),
   onSpeed: (speed) => post('/api/speed', { speed }),
   onSelect: (id) => selectAgent(id),
+  onMeetingDecide: (payload) => post('/api/meeting/decide', payload),
+  onMeetingStop: () => post('/api/meeting/stop', {}),
 });
+
+/**
+ * Aplica o estado da reuniao na cena e no card.
+ *
+ * Os agentes ficam sentados enquanto a reuniao estiver aberta (mesmo depois
+ * que as propostas chegam): eles estao "discutindo" o que foi proposto.
+ * Quando a reuniao fecha ou uma execucao comeca, todos voltam para a mesa.
+ */
+function setMeeting(m) {
+  const state = m || { active: false, busy: false, proposals: [] };
+
+  renderer.meeting = { called: !!state.active, busy: !!state.busy };
+
+  if (state.active) {
+    for (const a of Object.values(agents)) {
+      if (!a.inMeeting) a.goMeet();
+    }
+  } else {
+    for (const a of Object.values(agents)) a.leaveMeeting();
+  }
+
+  ui.setMeeting(state);
+}
+
+/** Abre (ou fecha) a reuniao ao clicar no botao da mesa. */
+async function toggleMeeting() {
+  if (renderer.meeting?.called) {
+    await post('/api/meeting/stop', {});
+    return;
+  }
+  const taskEl = document.getElementById('taskInput');
+  await post('/api/meeting/start', { task: taskEl?.value || '' });
+}
 
 function selectAgent(id) {
   renderer.selected = id;
@@ -34,20 +69,30 @@ async function post(url, body) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {}),
     });
-    const state = await res.json();
+    const data = await res.json();
+
+    // A reuniao devolve { meeting, run? }; o resto devolve o estado do runner.
+    if (data.meeting) {
+      setMeeting(data.meeting);
+      if (data.run) ui.setRunState(data.run);
+    }
 
     if (res.status === 409) {
-      ui.setRunState(state);
-      return;
-    }
-    if (state.error) {
-      console.error('[agent-town]', state.error);
-      return;
+      if (data.error) console.warn('[agent-town]', data.error);
+      if (!data.meeting) ui.setRunState(data);
+      return data;
     }
 
-    ui.setRunState(state);
+    if (data.error) {
+      console.error('[agent-town]', data.error);
+      return data;
+    }
+
+    if (!data.meeting) ui.setRunState(data);
+    return data;
   } catch (err) {
     console.error('[agent-town] falha ao chamar', url, err);
+    return null;
   }
 }
 
@@ -59,7 +104,9 @@ function handleEvent(ev) {
   if (ev.type === 'snapshot') {
     ui.setRunState(ev.state || { running: false });
     ui.resetTokens();
+    // renderEvents repovoa o card de eventos; applySnapshot cuida dos sprites.
     applySnapshot(agents, ev.events, ui);
+    setMeeting(ev.meeting);
 
     // reconstrói plano e diff ao reabrir a página no meio de uma execução
     for (const e of ev.events || []) {
@@ -78,7 +125,18 @@ function handleEvent(ev) {
       ui.resetTokens();
       ui.resetPlan();
       ui.resetDiff();
+      // uma execucao comeca: todos levantam da mesa
+      setMeeting({ active: false, busy: false, proposals: ui.meetingState.proposals });
       resetRoom(agents);
+      return;
+
+    case 'meeting_started':
+      setMeeting({ active: true, busy: true, proposals: [] });
+      return;
+
+    case 'meeting_done':
+      // meeting_done tambem e emitido ao fechar: usa o payload do servidor
+      setMeeting(ev.meeting);
       return;
 
     case 'run_finished':
@@ -169,8 +227,14 @@ function frame(now) {
   const dt = Math.min(80, now - last);
   last = now;
 
-  for (const agent of Object.values(agents)) agent.update(dt, now);
-  renderer.draw(now);
+  try {
+    for (const agent of Object.values(agents)) agent.update(dt, now);
+    renderer.draw(now);
+  } catch (err) {
+    // Um erro aqui nao pode matar o loop: sem o requestAnimationFrame
+    // reagendado a tela congela no meio do frame e fica preta.
+    console.error('[agent-town] falha no render', err);
+  }
 
   requestAnimationFrame(frame);
 }
@@ -184,11 +248,21 @@ new ResizeObserver(() => renderer.resize()).observe(stage);
 window.addEventListener('resize', () => renderer.resize());
 
 overlayCanvas.addEventListener('click', (e) => {
+  // O botao da mesa tem prioridade sobre a selecao de agente: ele fica no
+  // meio da sala e seria facil errar o alvo.
+  if (renderer.hitMeeting(e.clientX, e.clientY)) {
+    toggleMeeting();
+    return;
+  }
   const hit = renderer.pick(e.clientX, e.clientY);
   selectAgent(hit ? (renderer.selected === hit.def.id ? null : hit.def.id) : null);
 });
 
 overlayCanvas.addEventListener('mousemove', (e) => {
+  if (renderer.hitMeeting(e.clientX, e.clientY)) {
+    overlayCanvas.style.cursor = 'pointer';
+    return;
+  }
   const hit = renderer.pick(e.clientX, e.clientY);
   overlayCanvas.style.cursor = hit ? 'pointer' : 'default';
 });

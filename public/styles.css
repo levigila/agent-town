@@ -290,9 +290,13 @@ button:focus-visible {
   flex: 0 0 auto;
 }
 
+/* Card de eventos.
+   min-height fixo porque a sidebar e uma coluna flex com overflow-y: auto:
+   com `min-height: 0` o painel era espremido pelos paineis de cima e sobrava
+   so o cabecalho — parecia que o card "nao funcionava". */
 .panel-log {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 1 0 auto;
+  min-height: 300px;
   display: flex;
   flex-direction: column;
   padding-bottom: 6px;
@@ -493,7 +497,7 @@ button:focus-visible {
   padding: 0;
   overflow-y: auto;
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 200px;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -985,4 +989,147 @@ button:focus-visible {
 .rate-badge[data-tone='out'] {
   color: #ff9a9a;
   border-color: #6a2626;
+}
+
+/* ------------------------------------------------------------ reuniao */
+/* Card de propostas: cada agente propoe uma melhoria e o usuario escolhe
+   o que vira execucao de verdade. */
+.panel-meeting {
+  border-color: #2a3a44;
+}
+
+.proposal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 46vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.proposal {
+  position: relative;
+  border: 1px solid var(--border-soft);
+  border-left: 2px solid var(--accent, #4be0c8);
+  border-radius: 9px;
+  padding: 9px 10px;
+  background: #10141c;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.proposal[data-status='approved'] {
+  border-left-color: #4caf50;
+  background: #0f1a13;
+}
+
+.proposal.is-busy {
+  color: var(--muted-2);
+  font-size: 11px;
+  font-style: italic;
+  border-left-color: #3a4358;
+}
+
+.proposal.is-err {
+  color: #f0938f;
+  font-size: 11px;
+  border-left-color: #7a2f33;
+}
+
+.proposal-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.proposal-check {
+  margin: 2px 0 0;
+  accent-color: #4be0c8;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.proposal-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e2e8f4;
+  line-height: 1.35;
+}
+
+.proposal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 10px;
+  align-items: center;
+}
+
+.proposal-kind {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #182231;
+  color: #8fb4d8;
+}
+
+.proposal-kind[data-kind='visual'] { background: #1e2534; color: #a9c1e8; }
+.proposal-kind[data-kind='agente'] { background: #2a2036; color: #c8a9e8; }
+.proposal-kind[data-kind='implementacao'] { background: #102c28; color: #7fe8d8; }
+.proposal-kind[data-kind='processo'] { background: #2c2718; color: #e8d07f; }
+
+.proposal-effort {
+  color: var(--muted-2);
+}
+
+.proposal-author {
+  margin-left: auto;
+  font-weight: 600;
+}
+
+.proposal-text {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #aab3c5;
+}
+
+.proposal-text.is-how {
+  color: #8d97a9;
+}
+
+.proposal-files {
+  font-size: 10px;
+  color: #6b7590;
+  word-break: break-all;
+}
+
+.proposal-discard {
+  align-self: flex-start;
+  font-size: 10px;
+  padding: 2px 7px;
+}
+
+.proposal-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7590;
+}
+
+.meeting-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.meeting-foot .btn {
+  flex: 1 1 auto;
 }

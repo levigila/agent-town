@@ -25,6 +25,14 @@ const STATE_LABEL = {
 
 const MAX_LOG = 300;
 
+/** Rotulo curto do tipo de proposta (espelha src/brainstorm.mjs). */
+const KIND_LABEL = {
+  visual: 'visual',
+  agente: 'novo agente',
+  implementacao: 'implementacao',
+  processo: 'processo',
+};
+
 const fmtTime = (ts) =>
   new Date(ts).toLocaleTimeString('pt-BR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
@@ -73,6 +81,16 @@ export class UI {
     this.diffBody = document.getElementById('diffBody');
     this.diffMeta = document.getElementById('diffMeta');
 
+    // card da reuniao (propostas de melhoria)
+    this.meetingPanel = document.getElementById('meetingPanel');
+    this.meetingList = document.getElementById('meetingList');
+    this.meetingMeta = document.getElementById('meetingMeta');
+    this.meetingFoot = document.getElementById('meetingFoot');
+    this.btnMeetingApprove = document.getElementById('btnMeetingApprove');
+    this.btnMeetingStop = document.getElementById('btnMeetingStop');
+    this.meetingSelection = new Set();
+    this.meetingState = { active: false, busy: false, proposals: [] };
+
     this.recentEl = document.getElementById('recentProjects');
     this.picker = {
       dialog: document.getElementById('pickerDialog'),
@@ -102,6 +120,11 @@ export class UI {
     document.getElementById('btnClear').addEventListener('click', () => this.clearLog());
 
     this.modeEl.addEventListener('change', () => this.syncMode());
+
+    this.btnMeetingApprove?.addEventListener('click', () => {
+      this.decideMeeting({ approve: [...this.meetingSelection] });
+    });
+    this.btnMeetingStop?.addEventListener('click', () => this.handlers.onMeetingStop?.());
     this.taskEl.addEventListener('keydown', (e) => {
       // Ctrl+Enter inicia sem sair do campo
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !this.btnRun.disabled) {
@@ -464,6 +487,200 @@ export class UI {
     this.diffMeta.textContent = '';
   }
 
+  // -- reuniao: propostas de melhoria ---------------------------------------
+
+  /**
+   * Atualiza o card da reuniao.
+   *
+   * @param {object} m estado vindo do servidor (ou do evento meeting_done)
+   */
+  setMeeting(m) {
+    this.meetingState = {
+      active: !!m?.active,
+      busy: !!m?.busy,
+      proposals: Array.isArray(m?.proposals) ? m.proposals : [],
+      errors: Array.isArray(m?.errors) ? m.errors : [],
+      error: m?.error || null,
+      target: m?.target || '',
+    };
+
+    // Some com a selecao de propostas que nao existem mais
+    const alive = new Set(this.meetingState.proposals.filter((p) => p.status === 'pending').map((p) => p.id));
+    for (const id of [...this.meetingSelection]) if (!alive.has(id)) this.meetingSelection.delete(id);
+
+    this.renderMeeting();
+  }
+
+  renderMeeting() {
+    const panel = this.meetingPanel;
+    if (!panel) return;
+
+    const { busy, proposals, errors, error, target } = this.meetingState;
+    const visible = proposals.filter((p) => p.status !== 'dismissed');
+
+    // O card so aparece quando ha algo para mostrar
+    if (!busy && !visible.length && !error && !errors.length) {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+
+    const approved = proposals.filter((p) => p.status === 'approved').length;
+    const pending = proposals.filter((p) => p.status === 'pending').length;
+
+    this.meetingMeta.textContent = busy
+      ? 'os agentes estao pensando…'
+      : [
+          `${visible.length} proposta(s)`,
+          approved ? `${approved} aprovada(s)` : '',
+          target ? `alvo: ${target.split(/[\\/]/).pop()}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · ');
+
+    this.meetingList.innerHTML = '';
+
+    if (busy) {
+      const li = document.createElement('li');
+      li.className = 'proposal is-busy';
+      li.textContent = 'reuniao em andamento — cada agente esta propondo uma melhoria';
+      this.meetingList.appendChild(li);
+    }
+
+    for (const p of visible) {
+      this.meetingList.appendChild(this.buildProposal(p));
+    }
+
+    // rodape: aprovar selecionadas
+    const count = this.meetingSelection.size;
+    if (this.btnMeetingApprove) {
+      this.btnMeetingApprove.disabled = count === 0 || busy;
+      this.btnMeetingApprove.textContent =
+        count > 0 ? `implementar ${count} selecionada(s)` : 'selecione as propostas';
+    }
+    if (this.meetingFoot) this.meetingFoot.hidden = busy || !pending;
+
+    if (error) {
+      const li = document.createElement('li');
+      li.className = 'proposal is-err';
+      li.textContent = error;
+      this.meetingList.appendChild(li);
+    }
+
+    for (const e of errors.slice(0, 3)) {
+      const li = document.createElement('li');
+      li.className = 'proposal is-err';
+      li.textContent = `${e.agentId}: ${e.problem}`;
+      this.meetingList.appendChild(li);
+    }
+  }
+
+  buildProposal(p) {
+    const def = agentOf(p.agentId);
+    const accent = def?.accent || '#4be0c8';
+
+    const li = document.createElement('li');
+    li.className = 'proposal';
+    li.dataset.id = p.id;
+    li.dataset.status = p.status || 'pending';
+    li.style.setProperty('--accent', accent);
+
+    const head = document.createElement('div');
+    head.className = 'proposal-head';
+
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.className = 'proposal-check';
+    check.checked = this.meetingSelection.has(p.id);
+    check.disabled = p.status !== 'pending';
+    check.addEventListener('change', () => {
+      if (check.checked) this.meetingSelection.add(p.id);
+      else this.meetingSelection.delete(p.id);
+      this.renderMeeting();
+    });
+
+    const title = document.createElement('span');
+    title.className = 'proposal-title';
+    title.textContent = p.title;
+
+    head.append(check, title);
+    li.appendChild(head);
+
+    const meta = document.createElement('div');
+    meta.className = 'proposal-meta';
+    meta.innerHTML = [
+      `<span class="proposal-kind" data-kind="${escapeAttr(p.kind)}">${escapeHtml(KIND_LABEL[p.kind] || p.kind)}</span>`,
+      `<span class="proposal-effort">${escapeHtml(p.effort)}</span>`,
+      `<span class="proposal-author" style="color:${escapeAttr(accent)}">${escapeHtml(p.agentName || p.agentId)}</span>`,
+    ].join('');
+    li.appendChild(meta);
+
+    if (p.why) {
+      const why = document.createElement('p');
+      why.className = 'proposal-text';
+      why.textContent = p.why;
+      li.appendChild(why);
+    }
+    if (p.how) {
+      const how = document.createElement('p');
+      how.className = 'proposal-text is-how';
+      how.textContent = p.how;
+      li.appendChild(how);
+    }
+    if (p.files?.length) {
+      const files = document.createElement('div');
+      files.className = 'proposal-files';
+      files.textContent = p.files.join(' · ');
+      li.appendChild(files);
+    }
+
+    if (p.status === 'pending') {
+      const discard = document.createElement('button');
+      discard.className = 'ghost proposal-discard';
+      discard.type = 'button';
+      discard.textContent = 'descartar';
+      discard.addEventListener('click', () => this.decideMeeting({ dismiss: [p.id] }));
+      li.appendChild(discard);
+    } else {
+      const tag = document.createElement('span');
+      tag.className = 'proposal-tag';
+      tag.textContent = p.status === 'approved' ? 'em implementacao' : 'descartada';
+      li.appendChild(tag);
+    }
+
+    return li;
+  }
+
+  decideMeeting({ approve = [], dismiss = [] }) {
+    this.handlers.onMeetingDecide?.({ approve, dismiss });
+  }
+
+  resetMeeting() {
+    this.meetingSelection.clear();
+    this.meetingState = { active: false, busy: false, proposals: [] };
+    if (this.meetingPanel) this.meetingPanel.hidden = true;
+    if (this.meetingList) this.meetingList.innerHTML = '';
+  }
+
+  // -- log de eventos -------------------------------------------------------
+
+  /**
+   * Repovoa o log a partir de uma lista de eventos (usado no snapshot).
+   *
+   * Sem isso, recarregar a pagina no meio de uma execucao deixava o card de
+   * eventos vazio, mesmo com o servidor tendo 150 eventos guardados — o
+   * handlers.js chamava `ui.renderEvents?.(...)` e o metodo nao existia.
+   */
+  renderEvents(list) {
+    this.clearLog();
+    const events = Array.isArray(list) ? list : [];
+    for (const ev of events) {
+      if (ev && ev.type) this.addEvent(ev);
+    }
+    if (events.length && this.emptyEl) this.emptyEl.hidden = true;
+    this.logEl.scrollTop = this.logEl.scrollHeight;
+  }
+
   buildRoster() {
     this.rosterEl.innerHTML = '';
     for (const def of AGENT_LIST) {
@@ -479,7 +696,7 @@ export class UI {
             <span class="card-model">${def.model}</span>
           </span>
           <span class="card-sub">
-            <span class="card-role">${def.role}</span>
+            <span class="card-role">${def.roleName || def.role}</span>
             <span class="card-state">ocioso</span>
             <span class="card-tokens">0 tok</span>
           </span>

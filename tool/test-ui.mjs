@@ -40,11 +40,47 @@ class FakeEl {
     };
     this.textContent = '';
     this.value = '';
-    this.innerHTML = '';
+    this._html = '';
     this.hidden = false;
     this.disabled = false;
     this.parentNode = null;
     this.listeners = {};
+  }
+
+  /**
+   * innerHTML precisa se comportar como no DOM real: atribuir '' LIMPA os
+   * filhos. Sem isso, `el.innerHTML = ''` num elemento do teste deixava os
+   * filhos antigos no lugar e as asserções viam listas duplicadas.
+   */
+  get innerHTML() {
+    return this._html;
+  }
+
+  set innerHTML(value) {
+    this._html = String(value ?? '');
+    if (this._html === '') this.children.length = 0;
+  }
+
+  /** className alimenta o classList, como no DOM real. */
+  get className() {
+    return [...this.classList._s].join(' ');
+  }
+
+  set className(value) {
+    this.classList._s = new Set(String(value ?? '').split(/\s+/).filter(Boolean));
+  }
+
+  /** textContent agrega o dos filhos, como no DOM real. */
+  get textContent() {
+    if (this.children.length) {
+      return this.children.map((c) => c.textContent ?? '').join('');
+    }
+    return this._text ?? '';
+  }
+
+  set textContent(value) {
+    this._text = String(value ?? '');
+    this.children.length = 0;
   }
   appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
   append(...nodes) { for (const n of nodes) this.appendChild(n); }
@@ -142,13 +178,12 @@ try {
   const ui = new UI(handlers);
 
   // métodos que o main.js chama — todos precisam existir.
-  // renderEvents não entra na lista: handlers.js chama com `?.` porque é
-  // opcional, e a UI atual repovoa o log por outro caminho.
   const required = [
     'addEvent',
     'addTokens',
     'resetTokens',
     'clearLog',
+    'renderEvents',
     'setRunState',
     'setAgentStatus',
     'renderPlan',
@@ -159,6 +194,10 @@ try {
     'selectAgent',
     'setMode',
     'renderRateLimit',
+    'setMeeting',
+    'renderMeeting',
+    'decideMeeting',
+    'resetMeeting',
   ];
 
   for (const m of required) {
@@ -223,6 +262,131 @@ try {
     !ui.logEl || ui.logEl.children.length <= 320,
     `o log deveria ser limitado (~300), tem ${ui.logEl?.children.length}`,
   );
+
+  // -------------------------------------------------------------------------
+  // Card de eventos: renderEvents precisa REPOVOAR a partir do snapshot.
+  //
+  // Este era o bug: handlers.js chamava `ui.renderEvents?.(list)`, o metodo
+  // nao existia, e recarregar a pagina no meio de uma execucao deixava o card
+  // vazio mesmo com 150 eventos guardados no servidor.
+  // -------------------------------------------------------------------------
+  {
+    ui.renderEvents(sample);
+    const depoisDoSnapshot = ui.logEl.children.length;
+    expect(depoisDoSnapshot > 0, `renderEvents deveria repovoar o log, ficou com ${depoisDoSnapshot}`);
+
+    // e nao pode duplicar: repovoar duas vezes da o mesmo tamanho
+    ui.renderEvents(sample);
+    expect(
+      ui.logEl.children.length === depoisDoSnapshot,
+      `renderEvents deveria limpar antes de repovoar (${depoisDoSnapshot} -> ${ui.logEl.children.length})`,
+    );
+
+    // lista vazia nao pode quebrar
+    ui.renderEvents([]);
+    expect(ui.logEl.children.length === 0, 'renderEvents([]) deveria limpar o log');
+    expect(ui.emptyEl.hidden === false, 'com log vazio, o aviso "Nenhum evento" deveria voltar');
+  }
+
+  // -------------------------------------------------------------------------
+  // Card da reuniao
+  // -------------------------------------------------------------------------
+  {
+    const propostas = [
+      {
+        id: 'p_coder-1',
+        agentId: 'coder-1',
+        agentName: 'Caio',
+        kind: 'visual',
+        title: 'Cadeado no agente bloqueado',
+        why: 'nao da para ver quem travou',
+        how: 'desenhar acima da cabeca',
+        files: ['public/js/sprite.js'],
+        effort: 'pequeno',
+        status: 'pending',
+      },
+      {
+        id: 'p_reviewer-1',
+        agentId: 'reviewer-1',
+        agentName: 'Vera',
+        kind: 'implementacao',
+        title: 'Botao de reexecutar so a tarefa que falhou',
+        why: '',
+        how: '',
+        files: [],
+        effort: 'medio',
+        status: 'pending',
+      },
+    ];
+
+    ui.setMeeting({ active: true, busy: false, proposals: propostas, target: 'C:\\agent-town' });
+
+    expect(ui.meetingPanel.hidden === false, 'o card deveria aparecer com propostas');
+    expect(ui.meetingList.children.length === 2, `deveria renderizar 2 propostas, tem ${ui.meetingList.children.length}`);
+    expect(ui.meetingMeta.textContent.includes('2 proposta'), `meta deveria contar: ${ui.meetingMeta.textContent}`);
+
+    // selecionar uma proposta habilita o botao de implementar
+    expect(ui.btnMeetingApprove.disabled === true, 'sem selecao, o botao deveria estar desabilitado');
+    ui.meetingSelection.add('p_coder-1');
+    ui.renderMeeting();
+    expect(ui.btnMeetingApprove.disabled === false, 'com selecao, o botao deveria habilitar');
+    expect(
+      ui.btnMeetingApprove.textContent.includes('1'),
+      `o botao deveria dizer quantas: ${ui.btnMeetingApprove.textContent}`,
+    );
+
+    // decideMeeting repassa a selecao para o handler
+    let recebido = null;
+    handlers.onMeetingDecide = (payload) => {
+      recebido = payload;
+    };
+    ui.decideMeeting({ approve: ['p_coder-1'] });
+    expect(recebido?.approve?.[0] === 'p_coder-1', `deveria repassar a aprovacao: ${JSON.stringify(recebido)}`);
+
+    // proposta aprovada sai da selecao e ganha selo
+    ui.setMeeting({
+      active: true,
+      busy: false,
+      proposals: [{ ...propostas[0], status: 'approved' }, propostas[1]],
+    });
+    expect(ui.meetingSelection.size === 0, 'proposta aprovada nao deveria continuar selecionavel');
+    const aprovada = ui.meetingList.children[0];
+    expect(aprovada.dataset.status === 'approved', 'a proposta aprovada deveria mudar de status');
+    expect(aprovada.querySelector('.proposal-tag')?.textContent === 'em implementacao', 'deveria ganhar selo');
+
+    // descartada some da lista
+    ui.setMeeting({ active: true, busy: false, proposals: [propostas[0], { ...propostas[1], status: 'dismissed' }] });
+    expect(ui.meetingList.children.length === 1, 'proposta descartada deveria sumir do card');
+
+    // estado vazio esconde o card
+    ui.setMeeting({ active: false, busy: false, proposals: [] });
+    expect(ui.meetingPanel.hidden === true, 'sem nada, o card deveria sumir');
+
+    // busy mostra o aviso
+    ui.setMeeting({ active: true, busy: true, proposals: [] });
+    expect(ui.meetingList.children.length === 1, 'durante a reuniao deveria mostrar o aviso de andamento');
+    expect(ui.btnMeetingApprove.disabled === true, 'durante a reuniao nao da para aprovar');
+
+    // erro do servidor aparece
+    ui.setMeeting({ active: true, busy: false, proposals: [], error: 'nenhum agente devolveu proposta' });
+    expect(
+      ui.meetingList.textContent.includes('nenhum agente'),
+      'o erro deveria aparecer no card',
+    );
+  }
+
+  // eventos novos da reuniao nao podem quebrar o log
+  for (const ev of [
+    { type: 'meeting_started', agentId: null, agents: [] },
+    { type: 'proposal', agentId: 'coder-1', proposal: { title: 'x', kind: 'visual' } },
+    { type: 'meeting_done', agentId: null, meeting: { proposals: [] } },
+  ]) {
+    try {
+      ui.addEvent({ id: 'm', ts: Date.now(), ...ev });
+    } catch (err) {
+      problems.push(`addEvent(${ev.type}) lançou: ${err.message}`);
+    }
+  }
 } catch (err) {
   problems.push(`ui.js nao carregou/construiu: ${err.message}\n${err.stack?.split('\n').slice(0, 4).join('\n')}`);
 }
