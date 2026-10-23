@@ -303,7 +303,15 @@ try {
         how: 'desenhar acima da cabeca',
         files: ['public/js/sprite.js'],
         effort: 'pequeno',
-        status: 'pending',
+        benefits: 'reduz dúvidas durante a execução',
+        risks: 'o indicador pode cobrir a animação',
+        impact: 'alto',
+        complexity: 'pequeno',
+        dependencies: ['status de tarefa'],
+        createdAt: 1730000000000,
+        feedback: [{ agentId: 'reviewer-1', agentName: 'Vera', critique: 'validar contraste', suggestion: 'adicionar teste visual' }],
+        votes: [{ agentId: 'reviewer-1', agentName: 'Vera', value: 'adjust', comment: 'boa proposta' }],
+        status: 'proposal',
       },
       {
         id: 'p_reviewer-1',
@@ -315,7 +323,7 @@ try {
         how: '',
         files: [],
         effort: 'medio',
-        status: 'pending',
+        status: 'proposal',
       },
     ];
 
@@ -323,7 +331,10 @@ try {
 
     expect(ui.meetingPanel.hidden === false, 'o card deveria aparecer com propostas');
     expect(ui.meetingList.children.length === 2, `deveria renderizar 2 propostas, tem ${ui.meetingList.children.length}`);
-    expect(ui.meetingMeta.textContent.includes('2 proposta'), `meta deveria contar: ${ui.meetingMeta.textContent}`);
+    expect(ui.meetingList.children[0].textContent.includes('riscos: o indicador'), 'o card deveria exibir riscos');
+    expect(ui.meetingList.children[0].textContent.includes('crítica: validar contraste'), 'o card deveria exibir crítica');
+    expect(ui.meetingList.children[0].textContent.includes('voto ajustar'), 'o card deveria exibir voto');
+    expect(ui.meetingMeta.textContent.includes('2 card'), `meta deveria contar: ${ui.meetingMeta.textContent}`);
 
     // selecionar uma proposta habilita o botao de implementar
     expect(ui.btnMeetingApprove.disabled === true, 'sem selecao, o botao deveria estar desabilitado');
@@ -352,11 +363,21 @@ try {
     expect(ui.meetingSelection.size === 0, 'proposta aprovada nao deveria continuar selecionavel');
     const aprovada = ui.meetingList.children[0];
     expect(aprovada.dataset.status === 'approved', 'a proposta aprovada deveria mudar de status');
-    expect(aprovada.querySelector('.proposal-tag')?.textContent === 'em implementacao', 'deveria ganhar selo');
+    expect(aprovada.querySelector('.proposal-status')?.textContent === 'aprovada', 'deveria ganhar selo');
+    expect(aprovada.querySelector('.proposal-implement')?.disabled === true, 'projeto nao inicia antes de fechar a reuniao');
 
-    // descartada some da lista
-    ui.setMeeting({ active: true, busy: false, proposals: [propostas[0], { ...propostas[1], status: 'dismissed' }] });
-    expect(ui.meetingList.children.length === 1, 'proposta descartada deveria sumir do card');
+    let projectProposal = null;
+    handlers.onMeetingImplement = (ids) => {
+      projectProposal = ids[0];
+    };
+    ui.setMeeting({ active: false, busy: false, proposals: [{ ...propostas[0], status: 'approved' }] });
+    ui.meetingList.children[0].querySelector('.proposal-implement')?.dispatch('click');
+    expect(projectProposal === propostas[0].id, 'cada proposta aprovada deveria iniciar seu proprio projeto');
+
+    // rejeitadas permanecem no historico
+    ui.setMeeting({ active: true, busy: false, proposals: [propostas[0], { ...propostas[1], status: 'rejected' }] });
+    expect(ui.meetingList.children.length === 2, 'proposta rejeitada deveria permanecer no card');
+    expect(ui.meetingList.children[1].dataset.status === 'rejected', 'proposta rejeitada precisa mostrar o status');
 
     // estado vazio esconde o card
     ui.setMeeting({ active: false, busy: false, proposals: [] });

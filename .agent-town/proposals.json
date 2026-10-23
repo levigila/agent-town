@@ -1,0 +1,244 @@
+[
+  {
+    "id": "p_planner_mvkw0otq_1",
+    "agentId": "planner",
+    "agentName": "Ada",
+    "role": "planner",
+    "kind": "visual",
+    "title": "Cadeado pulsante sobre a cabeça do agente bloqueado",
+    "why": "Hoje um agente parado esperando dependência parece idêntico a um agente ocioso: mesmo sprite, mesma pose, nenhum sinal. Numa execução em ondas, o gargalo quase sempre é um agente bloqueado, e quem olha o escritório perde tempo procurando quem travou o grafo. Um ícone de cadeado âmbar pulsando acima da cabeça torna o bloqueio legível em meio segundo, sem precisar abrir painel nenhum, e dá ao time um alvo visual imediato para investigar.",
+    "how": "1) Em public/js/renderer.js, dentro do loop que desenha cada agente, logo depois de desenhar o nome/etiqueta, chamar um novo helper drawStatusIcon(ctx, px, py - 16, agent). 2) Implementar drawStatusIcon(ctx, x, y, agent): sair cedo se agent.state !== 'blocked' (não poluir os demais estados); calcular pulse = 0.55 + 0.45 * Math.sin(performance.now() / 300); ctx.globalAlpha = pulse; desenhar o cadeado em pixel art puro com fillRect, grade de 7x7 px com escala 2 (corpo 5x4 em #f5a623, arco superior simulado por 3 fillRects de 1px de largura nas laterais e topo, e 1 furo 1x1 em #1a1a1a no centro d",
+    "files": [
+      "public/js/renderer.js",
+      "public/js/agent.js"
+    ],
+    "effort": "pequeno",
+    "benefits": "Hoje um agente parado esperando dependência parece idêntico a um agente ocioso: mesmo sprite, mesma pose, nenhum sinal. Numa execução em ondas, o gargalo quase sempre é um agente bloqueado, e quem olha o escritório perde tempo procurando quem travou o grafo. Um ícone de cadeado âmbar pulsando acima da cabeça torna o bloqueio legível em meio segundo, sem precisar abrir painel nenhum, e dá ao time um alvo visual imediato para investigar.",
+    "risks": "",
+    "impact": "medio",
+    "dependencies": [],
+    "feedback": [],
+    "votes": [],
+    "removedFiles": [],
+    "complexity": "pequeno",
+    "createdAt": 1792754965934,
+    "status": "approved",
+    "statusHistory": [
+      {
+        "status": "proposal",
+        "at": 1792754965934
+      },
+      {
+        "status": "approved",
+        "at": 1792755098492
+      }
+    ],
+    "updatedAt": 1792755098492
+  },
+  {
+    "id": "p_researcher-1_mvkw0otq_2",
+    "agentId": "researcher-1",
+    "agentName": "Rita",
+    "role": "researcher",
+    "kind": "visual",
+    "title": "Trilha de passos no chão entre agente e mesa de trabalho",
+    "why": "As propostas anteriores já cobrem bloqueio (cadeado) e status genérico, mas o escritório ainda não mostra ONDE o trabalho acontece. Uma trilha de pegadas no chão do agente até sua mesa deixa claro qual estação cada agente ocupa e reforça a leitura de fluxo de trabalho em ondas, diferenciando visualmente os agentes ativos dos decorativos.",
+    "how": "1) Em public/js/world.js, adicione ao mapa de tiles um caminho fixo (array de coordenadas) de cada spawn de agente até sua mesa. 2) Em public/js/renderer.js, no draw do chão, pinte tiles de trilha (cor de tapete/pegadas em 2 tons alternados) sobre esses tiles, usando o mesmo tileset/escala existente. 3) Opcionalmente, em public/js/config.js, exponha o array de trilhas como configuração para ajustar posições sem mexer no renderer. 4) Testar no preview carregando public/index.html e conferindo que a trilha não sobrepõe sprites de agentes.",
+    "files": [
+      "public/js/world.js",
+      "public/js/renderer.js",
+      "public/js/config.js"
+    ],
+    "effort": "pequeno",
+    "benefits": "As propostas anteriores já cobrem bloqueio (cadeado) e status genérico, mas o escritório ainda não mostra ONDE o trabalho acontece. Uma trilha de pegadas no chão do agente até sua mesa deixa claro qual estação cada agente ocupa e reforça a leitura de fluxo de trabalho em ondas, diferenciando visualmente os agentes ativos dos decorativos.",
+    "risks": "",
+    "impact": "medio",
+    "dependencies": [],
+    "feedback": [],
+    "votes": [],
+    "removedFiles": [],
+    "complexity": "pequeno",
+    "createdAt": 1792754965934,
+    "status": "approved",
+    "statusHistory": [
+      {
+        "status": "proposal",
+        "at": 1792754965934
+      },
+      {
+        "status": "approved",
+        "at": 1792755098492
+      }
+    ],
+    "updatedAt": 1792755098492
+  },
+  {
+    "id": "p_researcher-2_mvkw0otq_3",
+    "agentId": "researcher-2",
+    "agentName": "Rui",
+    "role": "researcher",
+    "kind": "visual",
+    "title": "Barra de progresso em miniatura sobre a mesa de cada agente",
+    "why": "As propostas anteriores cobrem bloqueio (cadeado) e posse de estacao (pegadas), mas ninguem consegue ver QUANTO falta para terminar. Uma barra de progresso fina acima da mesa mostra de relance quantos nos do grafo ja concluiram, transforma ondas de execucao em algo observavel em tempo real e ajuda a prever qual agente liberara o proximo no da dependencia.",
+    "how": "1) No public/js/agent.js, exponha no objeto do agente os contadores existentes (nos concluidos / nos totais da tarefa atual) ou calcule-os a partir do estado do grafo. 2) No public/js/renderer.js, ao desenhar cada agente, renderize acima da mesa um retangulo de ~16x3 pixels com fundo escuro, preenchido proporcionalmente em verde ate a porcentagem concluida. 3) So desenhe a barra quando houver tarefa ativa (progresso entre 0% e 100%) para nao poluir cenario ocioso. 4) No public/styles.css, adicione a cor da barra como variavel CSS reutilizada pelo painel de status para consistencia visual.",
+    "files": [
+      "public/js/agent.js",
+      "public/js/renderer.js",
+      "public/styles.css"
+    ],
+    "effort": "pequeno",
+    "benefits": "As propostas anteriores cobrem bloqueio (cadeado) e posse de estacao (pegadas), mas ninguem consegue ver QUANTO falta para terminar. Uma barra de progresso fina acima da mesa mostra de relance quantos nos do grafo ja concluiram, transforma ondas de execucao em algo observavel em tempo real e ajuda a prever qual agente liberara o proximo no da dependencia.",
+    "risks": "",
+    "impact": "medio",
+    "dependencies": [],
+    "feedback": [],
+    "votes": [],
+    "removedFiles": [],
+    "complexity": "pequeno",
+    "createdAt": 1792754965934,
+    "status": "approved",
+    "statusHistory": [
+      {
+        "status": "proposal",
+        "at": 1792754965934
+      },
+      {
+        "status": "approved",
+        "at": 1792755098492
+      }
+    ],
+    "updatedAt": 1792755098492
+  },
+  {
+    "id": "p_coder-1_mvkw0otq_4",
+    "agentId": "coder-1",
+    "agentName": "Caio",
+    "role": "coder",
+    "kind": "visual",
+    "title": "Arcos de dependência: linhas tracejadas ligando o agente bloqueado a quem ele espera",
+    "why": "Hoje o escritório mostra o estado de cada agente, mas não a topologia do grafo: quem espera quem só existe no painel de grafo, fora do canvas. Desenhar um arco tracejado do agente bloqueado até o agente do nó do qual ele depende transforma o próprio cenário no grafo de execução — dá para ver a cadeia de gargalo, identificar a raiz do bloqueio e prever qual onda vai destravar sozinha, sem trocar de aba. É complementar ao cadeado (que diz 'estou parado') porque responde a pergunta seguinte: 'parado por causa de quem'.",
+    "how": "1) Em public/js/agent.js, garanta que todo agente em estado 'blocked' carregue um campo blockedBy com o id (ou nome) do agente/nó do qual depende; preencha esse campo no mesmo ponto do código que hoje já seta o estado para 'blocked' (se a origem for o grafo em src/graph.mjs via handler, propague o id até o objeto do agente em vez de recalcular no renderer). 2) Em public/js/renderer.js, logo depois de desenhar o piso e ANTES de desenhar os sprites, adicione um bloco drawDependencyArcs(ctx, agents): para cada agente com state === 'blocked' e blockedBy resolvido para outro agente existente, calcu",
+    "files": [
+      "public/js/renderer.js",
+      "public/js/agent.js"
+    ],
+    "effort": "pequeno",
+    "benefits": "Hoje o escritório mostra o estado de cada agente, mas não a topologia do grafo: quem espera quem só existe no painel de grafo, fora do canvas. Desenhar um arco tracejado do agente bloqueado até o agente do nó do qual ele depende transforma o próprio cenário no grafo de execução — dá para ver a cadeia de gargalo, identificar a raiz do bloqueio e prever qual onda vai destravar sozinha, sem trocar de aba. É complementar ao cadeado (que diz 'estou parado') porque responde a pergunta seguinte: 'parado por causa de quem'.",
+    "risks": "",
+    "impact": "medio",
+    "dependencies": [],
+    "feedback": [],
+    "votes": [],
+    "removedFiles": [],
+    "complexity": "pequeno",
+    "createdAt": 1792754965934,
+    "status": "proposal",
+    "statusHistory": [
+      {
+        "status": "proposal",
+        "at": 1792754965934
+      }
+    ]
+  },
+  {
+    "id": "p_coder-2_mvkw0otq_5",
+    "agentId": "coder-2",
+    "agentName": "Clara",
+    "role": "coder",
+    "kind": "visual",
+    "title": "Quadro de parede com o placar da onda atual (trabalhando / bloqueados / concluídos)",
+    "why": "Todas as propostas anteriores olham para um agente por vez (cadeado, pegadas, barra, arcos). Falta a leitura de conjunto: numa execução em ondas, a pergunta que mais se faz na reunião é 'como está a onda agora?'. Um quadro branco na parede do escritório com a onda atual e a contagem por estado dá esse resumo em um relance, sem painel e sem ruído sobre os sprites — e, por ser estático e agregado, não compete visualmente com os indicadores individuais que já foram propostos.",
+    "how": "1) Em public/js/world.js, adicione uma decoração estática de quadro branco na parede norte, em tiles fixos (ex.: x 6..12, y 1..3): moldura cinza-escura de 1px, superfície clara e uma bandeja inferior, tudo desenhado com a mesma paleta pixel art já usada no arquivo. Exporte as coordenadas do quadro (ex.: WORLD.whiteboard = {x, y, w, h}) para o renderer consumir. 2) Em public/js/config.js, adicione um objeto SCOREBOARD com as três categorias e as cores de status já existentes no projeto (trabalhando, bloqueado, concluído), para não duplicar hex pelo código. 3) Em public/js/renderer.js, depois de",
+    "files": [
+      "public/js/world.js",
+      "public/js/renderer.js",
+      "public/js/config.js"
+    ],
+    "effort": "pequeno",
+    "benefits": "Todas as propostas anteriores olham para um agente por vez (cadeado, pegadas, barra, arcos). Falta a leitura de conjunto: numa execução em ondas, a pergunta que mais se faz na reunião é 'como está a onda agora?'. Um quadro branco na parede do escritório com a onda atual e a contagem por estado dá esse resumo em um relance, sem painel e sem ruído sobre os sprites — e, por ser estático e agregado, não compete visualmente com os indicadores individuais que já foram propostos.",
+    "risks": "",
+    "impact": "medio",
+    "dependencies": [],
+    "feedback": [],
+    "votes": [],
+    "removedFiles": [],
+    "complexity": "pequeno",
+    "createdAt": 1792754965934,
+    "status": "approved",
+    "statusHistory": [
+      {
+        "status": "proposal",
+        "at": 1792754965934
+      },
+      {
+        "status": "approved",
+        "at": 1792755098492
+      }
+    ],
+    "updatedAt": 1792755098492
+  },
+  {
+    "id": "p_reviewer-1_mvkw0otq_6",
+    "agentId": "reviewer-1",
+    "agentName": "Vera",
+    "role": "reviewer",
+    "kind": "visual",
+    "title": "Balão de fala com o nome do nó atual que o agente executa",
+    "why": "As propostas anteriores cobrem bloqueio (cadeado), posse de estação (pegadas), progresso (barra), topologia (arcos) e agregado (quadro). Falta o conteúdo: quando um agente está trabalhando, ninguém sabe O QUÊ ele está fazendo sem abrir o painel de grafo. Um pequeno balão de fala pixel art sobre a cabeça, exibindo o título truncado do nó em execução (ex.: 'escrever testes...'), transforma o escritório numa narrativa legível — dá para seguir uma tarefa de ponta a ponta vendo quem a executa e quando ela muda de agente entre ondas.",
+    "how": "1) Em public/js/agent.js, expor no estado do agente o campo currentNodeTitle (título do nó em execução, ou null quando ocioso/bloqueado). 2) Em public/js/renderer.js, adicionar função drawSpeechBubble(ctx, agent): balão branco com borda escura e 'rabinho' apontando para a cabeça, desenhado com fillRect simples, texto truncado a ~20 caracteres com fonte do canvas, renderizado acima do sprite e abaixo de indicadores como o cadeado. 3) Em public/js/sprite.js, garantir que a altura do sprite exposta permita posicionar o balão sem sobreposição. 4) Em public/js/renderer.js, no loop de render, desenh",
+    "files": [
+      "public/js/renderer.js",
+      "public/js/agent.js",
+      "public/js/sprite.js"
+    ],
+    "effort": "pequeno",
+    "benefits": "As propostas anteriores cobrem bloqueio (cadeado), posse de estação (pegadas), progresso (barra), topologia (arcos) e agregado (quadro). Falta o conteúdo: quando um agente está trabalhando, ninguém sabe O QUÊ ele está fazendo sem abrir o painel de grafo. Um pequeno balão de fala pixel art sobre a cabeça, exibindo o título truncado do nó em execução (ex.: 'escrever testes...'), transforma o escritório numa narrativa legível — dá para seguir uma tarefa de ponta a ponta vendo quem a executa e quando ela muda de agente entre ondas.",
+    "risks": "",
+    "impact": "medio",
+    "dependencies": [],
+    "feedback": [],
+    "votes": [],
+    "removedFiles": [],
+    "complexity": "pequeno",
+    "createdAt": 1792754965934,
+    "status": "proposal",
+    "statusHistory": [
+      {
+        "status": "proposal",
+        "at": 1792754965934
+      }
+    ]
+  },
+  {
+    "id": "p_reviewer-2_mvkw0otq_7",
+    "agentId": "reviewer-2",
+    "agentName": "Vito",
+    "role": "reviewer",
+    "kind": "visual",
+    "title": "Marca de erro vermelho quando a execução de um nó falha",
+    "why": "As propostas anteriores cobrem bloqueio, progresso, topologia e conteúdo, mas nenhuma cobre FALHA. Quando um nó quebra, hoje o agente simplesmente para e o observador não sabe se é trabalho normal, bloqueio ou erro — erro é o caso que mais exige ação imediata. Um X vermelho sobre o agente distingue falha de espera em meio segundo.",
+    "how": "1. No src/graph.mjs, confirme que cada nó expõe estado (ex.: 'failed') e o id do agente atribuído; se houver campo de mensagem de erro, guarde-a junto. 2. Em public/js/agent.js, adicione ao estado do agente um flag 'failed' atualizado quando seu nó atual entra em falha, e limpo quando ele recebe novo nó. 3. Em public/js/renderer.js, desenhe acima da cabeça do agente um X pixel art vermelho (2 quadradinhos cruzados, ~8x8 px) quando 'failed' estiver ativo, sem pulso — a pulsação já pertence ao cadeado, assim os dois sinais não se confundem. 4. Em public/js/ui.js, ao clicar no agente com 'failed'",
+    "files": [
+      "public/js/agent.js",
+      "public/js/renderer.js",
+      "public/js/ui.js"
+    ],
+    "effort": "pequeno",
+    "benefits": "As propostas anteriores cobrem bloqueio, progresso, topologia e conteúdo, mas nenhuma cobre FALHA. Quando um nó quebra, hoje o agente simplesmente para e o observador não sabe se é trabalho normal, bloqueio ou erro — erro é o caso que mais exige ação imediata. Um X vermelho sobre o agente distingue falha de espera em meio segundo.",
+    "risks": "",
+    "impact": "medio",
+    "dependencies": [],
+    "feedback": [],
+    "votes": [],
+    "removedFiles": [],
+    "complexity": "pequeno",
+    "createdAt": 1792754965934,
+    "status": "proposal",
+    "statusHistory": [
+      {
+        "status": "proposal",
+        "at": 1792754965934
+      }
+    ]
+  }
+]

@@ -11,6 +11,7 @@
 //   - Nada e implementado sem aprovacao explicita do usuario.
 
 export const PROPOSAL_KINDS = ['visual', 'agente', 'implementacao', 'processo'];
+export const PROPOSAL_VOTES = ['approve', 'adjust', 'reject'];
 
 export const KIND_LABEL = {
   visual: 'visual',
@@ -206,12 +207,39 @@ export function normalizeProposal(raw, agent) {
       how: clean(raw.how, MAX_TEXT),
       files,
       effort: EFFORTS.includes(raw.effort) ? raw.effort : 'medio',
+      benefits: clean(raw.benefits || raw.why, MAX_TEXT),
+      risks: clean(raw.risks, MAX_TEXT),
+      impact: clean(raw.impact, 40) || 'medio',
+      dependencies: Array.isArray(raw.dependencies)
+        ? raw.dependencies.filter((value) => typeof value === 'string').map((value) => clean(value, 120)).slice(0, 8)
+        : [],
+      feedback: [],
+      votes: [],
     },
   };
 }
 
 /** Chave de deduplicação: duas propostas com o mesmo título são a mesma. */
 const dedupeKey = (p) => p.title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+function proposalSimilarity(a, b) {
+  const words = (value) =>
+    new Set(
+      String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .match(/[a-z0-9]+/g)
+        ?.filter((word) => word.length > 2) || [],
+    );
+  const left = words(a.title);
+  const right = words(b.title);
+  const union = new Set([...left, ...right]);
+  if (!union.size) return 0;
+  let shared = 0;
+  for (const word of left) if (right.has(word)) shared++;
+  return shared / union.size;
+}
 
 /**
  * Separa os caminhos que existem de verdade dos inventados.
@@ -281,12 +309,15 @@ export async function runMeeting({
   const usage = { in: 0, out: 0 };
   const errors = [];
   const collected = [];
+  let timedOut = false;
+  let timeoutHandle;
 
   emit('meeting_started', null, {
     agents: executors.map((a) => ({ id: a.id, name: a.name || a.id, role: a.role })),
   });
 
   const one = async (agent) => {
+    if (timedOut) return;
     const provider = byInstance?.[agent.id] || byRole?.[agent.role];
     if (!provider) {
       errors.push({ agentId: agent.id, problem: 'sem provedor' });
@@ -305,7 +336,19 @@ export async function runMeeting({
               role: 'system',
               content: agent.prompt || buildMeetingPrompt(agent, { canEdit, fileTree }),
             },
-            { role: 'user', content: context },
+            {
+              role: 'user',
+              content: [
+                context,
+                collected.length
+                  ? `Propostas ja apresentadas — analise-as e escolha uma ideia claramente diferente:\n${collected
+                      .map((p) => `- ${p.title}: ${p.why}`)
+                      .join('\n')}`
+                  : 'Voce e o primeiro a propor; apresente uma melhoria concreta.',
+              ]
+                .filter(Boolean)
+                .join('\n\n'),
+            },
           ],
           tools: [],
           temperature: 0.8,
@@ -316,6 +359,7 @@ export async function runMeeting({
 
     try {
       let res = await ask(maxTokens);
+      if (timedOut) return;
       usage.in += res.usage?.in || 0;
       usage.out += res.usage?.out || 0;
 
@@ -324,6 +368,7 @@ export async function runMeeting({
       if (res.finishReason === 'length') {
         emit('agent_thinking', agent.id, { text: 'resposta cortada, tentando com mais espaco' });
         res = await ask(maxTokens * 2);
+        if (timedOut) return;
         usage.in += res.usage?.in || 0;
         usage.out += res.usage?.out || 0;
       }
@@ -357,20 +402,47 @@ export async function runMeeting({
       checked.proposal.files = validos.kept;
       checked.proposal.removedFiles = validos.removed;
 
+      const similar = collected.find(
+        (prior) =>
+          dedupeKey(prior) === dedupeKey(checked.proposal) || proposalSimilarity(prior, checked.proposal) >= 0.6,
+      );
+      if (similar) {
+        const problem = `proposta semelhante a "${similar.title}"`;
+        errors.push({ agentId: agent.id, problem });
+        emit('agent_error', agent.id, { text: problem });
+        return;
+      }
+
       collected.push(checked.proposal);
       emit('proposal', agent.id, { proposal: checked.proposal });
       emit('agent_done', agent.id, { summary: checked.proposal.title });
     } catch (err) {
+      if (timedOut) return;
       if (signal?.aborted) throw err;
       errors.push({ agentId: agent.id, problem: err.message });
       emit('agent_error', agent.id, { text: err.message });
     }
   };
 
-  // Uma chamada por agente, em paralelo: o semáforo do provedor já limita a
-  // concorrência real, então não precisa de fila própria aqui.
-  const timeout = new Promise((resolve) => setTimeout(resolve, timeoutMs).unref?.());
-  await Promise.race([Promise.all(executors.map(one)), timeout]);
+  // A sequência é intencional: cada agente recebe as ideias já apresentadas
+  // antes de propor, evitando duplicação por falta de contexto.
+  const timeout = new Promise((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      resolve();
+    }, timeoutMs);
+    timeoutHandle.unref?.();
+  });
+  await Promise.race([
+    (async () => {
+      for (const agent of executors) {
+        if (timedOut) break;
+        await one(agent);
+      }
+    })(),
+    timeout,
+  ]);
+  if (timedOut) errors.push({ agentId: null, problem: `reuniao excedeu o limite de ${timeoutMs} ms` });
 
   // Dedup por título, mantendo a primeira proposta (a de quem respondeu antes).
   const seen = new Set();
@@ -386,6 +458,81 @@ export async function runMeeting({
   // para aprovar hoje.
   const order = { pequeno: 0, medio: 1, grande: 2 };
   proposals.sort((a, b) => (order[a.effort] ?? 1) - (order[b.effort] ?? 1));
+
+  const reviewOne = async (agent) => {
+    if (timedOut) return;
+    const provider = byInstance?.[agent.id] || byRole?.[agent.role];
+    if (!provider || !proposals.length) return;
+
+    try {
+      emit('agent_thinking', agent.id, { text: 'analisando propostas e preparando voto' });
+      const response = await provider.limiter.run(() =>
+        provider.chat({
+          messages: [
+            {
+              role: 'system',
+              content:
+                `Voce e ${agent.name || agent.id}, ${agent.roleName || agent.role}. ` +
+                'Participe do debate com critica construtiva e vote em CADA proposta. ' +
+                'Seja especifico sobre riscos e melhorias; o autor pode refinar depois. ' +
+                'Responda somente JSON: {"feedback":[{"proposalId":"...","critique":"...","suggestion":"...","vote":"approve|adjust|reject","comment":"..."}]}.',
+            },
+            {
+              role: 'user',
+              content: `ETAPA: DEBATE E VOTAÇÃO\n${JSON.stringify(
+                proposals.map(({ id, title, why, how, files }) => ({ id, title, why, how, files })),
+              )}`,
+            },
+          ],
+          tools: [],
+          temperature: 0.3,
+          maxTokens: Math.min(maxTokens, 2048),
+          signal,
+        }),
+      );
+      if (timedOut) return;
+      usage.in += response.usage?.in || 0;
+      usage.out += response.usage?.out || 0;
+      const parsed = extractObject(response.text || '');
+      const entries = Array.isArray(parsed?.feedback) ? parsed.feedback : [];
+      let count = 0;
+      for (const entry of entries) {
+        const proposal = proposals.find((item) => item.id === entry.proposalId);
+        if (!proposal || !PROPOSAL_VOTES.includes(entry.vote)) continue;
+        proposal.feedback.push({
+          agentId: agent.id,
+          agentName: agent.name || agent.id,
+          critique: clean(entry.critique, MAX_TEXT),
+          suggestion: clean(entry.suggestion, MAX_TEXT),
+        });
+        proposal.votes.push({
+          agentId: agent.id,
+          agentName: agent.name || agent.id,
+          value: entry.vote,
+          comment: clean(entry.comment, MAX_TEXT),
+          at: Date.now(),
+        });
+        count++;
+      }
+      if (count !== proposals.length) {
+        errors.push({
+          agentId: agent.id,
+          problem: `debate incompleto: registrou ${count} de ${proposals.length} votos`,
+        });
+      }
+    } catch (err) {
+      if (timedOut) return;
+      if (signal?.aborted) throw err;
+      errors.push({ agentId: agent.id, problem: `debate: ${err.message}` });
+      emit('agent_error', agent.id, { text: `debate: ${err.message}` });
+    }
+  };
+
+  await Promise.race([Promise.all(executors.map(reviewOne)), timeout]);
+  if (timedOut && !errors.some((entry) => /excedeu o limite/.test(entry.problem))) {
+    errors.push({ agentId: null, problem: `reuniao excedeu o limite de ${timeoutMs} ms` });
+  }
+  clearTimeout(timeoutHandle);
 
   emit('meeting_done', null, { proposals, errors, usage });
 

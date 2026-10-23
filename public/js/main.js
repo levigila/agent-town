@@ -22,6 +22,8 @@ const ui = new UI({
   onSelect: (id) => selectAgent(id),
   onMeetingDecide: (payload) => post('/api/meeting/decide', payload),
   onMeetingStop: () => post('/api/meeting/stop', {}),
+  onMeetingImplement: (ids) => post('/api/meeting/implement', { ids }),
+  onMeetingStatus: (payload) => post('/api/meeting/status', payload),
 });
 
 // ---------------------------------------------------------------------------
@@ -156,6 +158,11 @@ function handleEvent(ev) {
     return;
   }
 
+  if (ev.type === 'meeting_updated') {
+    setMeeting(ev.meeting);
+    return;
+  }
+
   ui.addEvent(ev);
 
   switch (ev.type) {
@@ -171,7 +178,7 @@ function handleEvent(ev) {
       return;
 
     case 'meeting_started':
-      setMeeting({ active: true, busy: true, proposals: [] });
+      setMeeting({ ...ui.meetingState, active: true, busy: true });
       return;
 
     case 'meeting_done':

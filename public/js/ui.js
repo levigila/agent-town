@@ -33,6 +33,19 @@ const KIND_LABEL = {
   processo: 'processo',
 };
 
+const PROPOSAL_STATUS = {
+  proposal: 'proposta',
+  analysis: 'em análise',
+  approved: 'aprovada',
+  rejected: 'rejeitada',
+  implementing: 'em implementação',
+  validating: 'em validação',
+  completed: 'concluída',
+  archived: 'arquivada',
+};
+
+const VOTE_LABEL = { approve: 'aprovar', adjust: 'ajustar', reject: 'rejeitar' };
+
 const fmtTime = (ts) =>
   new Date(ts).toLocaleTimeString('pt-BR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
@@ -87,6 +100,7 @@ export class UI {
     this.meetingMeta = document.getElementById('meetingMeta');
     this.meetingFoot = document.getElementById('meetingFoot');
     this.btnMeetingApprove = document.getElementById('btnMeetingApprove');
+    this.btnMeetingReject = document.getElementById('btnMeetingReject');
     this.btnMeetingStop = document.getElementById('btnMeetingStop');
     this.meetingSelection = new Set();
     this.meetingState = { active: false, busy: false, proposals: [] };
@@ -123,6 +137,9 @@ export class UI {
 
     this.btnMeetingApprove?.addEventListener('click', () => {
       this.decideMeeting({ approve: [...this.meetingSelection] });
+    });
+    this.btnMeetingReject?.addEventListener('click', () => {
+      this.decideMeeting({ reject: [...this.meetingSelection] });
     });
     this.btnMeetingStop?.addEventListener('click', () => this.handlers.onMeetingStop?.());
     this.taskEl.addEventListener('keydown', (e) => {
@@ -505,7 +522,7 @@ export class UI {
     };
 
     // Some com a selecao de propostas que nao existem mais
-    const alive = new Set(this.meetingState.proposals.filter((p) => p.status === 'pending').map((p) => p.id));
+    const alive = new Set(this.meetingState.proposals.filter((p) => p.status === 'proposal').map((p) => p.id));
     for (const id of [...this.meetingSelection]) if (!alive.has(id)) this.meetingSelection.delete(id);
 
     this.renderMeeting();
@@ -516,7 +533,7 @@ export class UI {
     if (!panel) return;
 
     const { busy, proposals, errors, error, target } = this.meetingState;
-    const visible = proposals.filter((p) => p.status !== 'dismissed');
+    const visible = proposals;
 
     // O card so aparece quando ha algo para mostrar
     if (!busy && !visible.length && !error && !errors.length) {
@@ -526,12 +543,11 @@ export class UI {
     panel.hidden = false;
 
     const approved = proposals.filter((p) => p.status === 'approved').length;
-    const pending = proposals.filter((p) => p.status === 'pending').length;
 
     this.meetingMeta.textContent = busy
       ? 'os agentes estao pensando…'
       : [
-          `${visible.length} proposta(s)`,
+          `${visible.length} card(s)`,
           approved ? `${approved} aprovada(s)` : '',
           target ? `alvo: ${target.split(/[\\/]/).pop()}` : '',
         ]
@@ -555,10 +571,10 @@ export class UI {
     const count = this.meetingSelection.size;
     if (this.btnMeetingApprove) {
       this.btnMeetingApprove.disabled = count === 0 || busy;
-      this.btnMeetingApprove.textContent =
-        count > 0 ? `implementar ${count} selecionada(s)` : 'selecione as propostas';
+      this.btnMeetingApprove.textContent = count > 0 ? `aprovar ${count}` : 'aprovar';
     }
-    if (this.meetingFoot) this.meetingFoot.hidden = busy || !pending;
+    if (this.btnMeetingReject) this.btnMeetingReject.disabled = count === 0 || busy;
+    if (this.meetingFoot) this.meetingFoot.hidden = false;
 
     if (error) {
       const li = document.createElement('li');
@@ -582,7 +598,7 @@ export class UI {
     const li = document.createElement('li');
     li.className = 'proposal';
     li.dataset.id = p.id;
-    li.dataset.status = p.status || 'pending';
+    li.dataset.status = p.status || 'proposal';
     li.style.setProperty('--accent', accent);
 
     const head = document.createElement('div');
@@ -592,7 +608,7 @@ export class UI {
     check.type = 'checkbox';
     check.className = 'proposal-check';
     check.checked = this.meetingSelection.has(p.id);
-    check.disabled = p.status !== 'pending';
+    check.disabled = !['proposal', 'analysis'].includes(p.status);
     check.addEventListener('change', () => {
       if (check.checked) this.meetingSelection.add(p.id);
       else this.meetingSelection.delete(p.id);
@@ -610,15 +626,24 @@ export class UI {
     meta.className = 'proposal-meta';
     meta.innerHTML = [
       `<span class="proposal-kind" data-kind="${escapeAttr(p.kind)}">${escapeHtml(KIND_LABEL[p.kind] || p.kind)}</span>`,
-      `<span class="proposal-effort">${escapeHtml(p.effort)}</span>`,
+      `<span class="proposal-effort">complexidade: ${escapeHtml(p.complexity || p.effort)}</span>`,
+      `<span class="proposal-effort">impacto: ${escapeHtml(p.impact || '—')}</span>`,
       `<span class="proposal-author" style="color:${escapeAttr(accent)}">${escapeHtml(p.agentName || p.agentId)}</span>`,
+      `<span class="proposal-area">área: ${escapeHtml(p.role || '—')}</span>`,
+      `<span class="proposal-id">${escapeHtml(p.id)}</span>`,
+      p.createdAt ? `<span class="proposal-date">${escapeHtml(new Date(p.createdAt).toLocaleDateString('pt-BR'))}</span>` : '',
     ].join('');
     li.appendChild(meta);
 
-    if (p.why) {
+    const status = document.createElement('span');
+    status.className = 'proposal-status';
+    status.textContent = PROPOSAL_STATUS[p.status] || p.status || 'proposta';
+    li.appendChild(status);
+
+    if (p.benefits || p.why) {
       const why = document.createElement('p');
       why.className = 'proposal-text';
-      why.textContent = p.why;
+      why.textContent = `benefício esperado: ${p.benefits || p.why}`;
       li.appendChild(why);
     }
     if (p.how) {
@@ -634,25 +659,67 @@ export class UI {
       li.appendChild(files);
     }
 
-    if (p.status === 'pending') {
-      const discard = document.createElement('button');
-      discard.className = 'ghost proposal-discard';
-      discard.type = 'button';
-      discard.textContent = 'descartar';
-      discard.addEventListener('click', () => this.decideMeeting({ dismiss: [p.id] }));
-      li.appendChild(discard);
-    } else {
-      const tag = document.createElement('span');
-      tag.className = 'proposal-tag';
-      tag.textContent = p.status === 'approved' ? 'em implementacao' : 'descartada';
-      li.appendChild(tag);
+    if (p.risks) {
+      const risks = document.createElement('p');
+      risks.className = 'proposal-text is-risk';
+      risks.textContent = `riscos: ${p.risks}`;
+      li.appendChild(risks);
+    }
+    if (p.dependencies?.length) {
+      const deps = document.createElement('p');
+      deps.className = 'proposal-text';
+      deps.textContent = `dependências: ${p.dependencies.join(', ')}`;
+      li.appendChild(deps);
+    }
+    for (const item of p.feedback || []) {
+      for (const [label, value] of [['crítica', item.critique], ['ajuste sugerido', item.suggestion]]) {
+        if (!value) continue;
+        const feedback = document.createElement('p');
+        feedback.className = 'proposal-text';
+        feedback.textContent = `${item.agentName || item.agentId} · ${label}: ${value}`;
+        li.appendChild(feedback);
+      }
+    }
+    for (const vote of p.votes || []) {
+      const entry = document.createElement('p');
+      entry.className = 'proposal-text';
+      entry.textContent = `voto ${VOTE_LABEL[vote.value] || vote.value}: ${vote.agentName || vote.agentId}${vote.comment ? ` — ${vote.comment}` : ''}`;
+      li.appendChild(entry);
+    }
+
+    if (p.status === 'approved') {
+      const implement = document.createElement('button');
+      implement.className = 'ghost proposal-discard proposal-implement';
+      implement.type = 'button';
+      implement.disabled = this.meetingState.active || this.meetingState.busy;
+      implement.textContent = 'implementar como projeto';
+      implement.addEventListener('click', () => this.handlers.onMeetingImplement?.([p.id]));
+      li.appendChild(implement);
+    } else if (p.status === 'validating') {
+      const complete = document.createElement('button');
+      complete.className = 'ghost proposal-discard';
+      complete.type = 'button';
+      complete.textContent = 'marcar como concluída';
+      complete.addEventListener('click', () =>
+        this.handlers.onMeetingStatus?.({ id: p.id, status: 'completed' }),
+      );
+      li.appendChild(complete);
+    } else if (!['completed', 'archived'].includes(p.status)) {
+      const archive = document.createElement('button');
+      archive.className = 'ghost proposal-discard';
+      archive.type = 'button';
+      archive.textContent = 'arquivar';
+      archive.addEventListener('click', () =>
+        this.handlers.onMeetingStatus?.({ id: p.id, status: 'archived' }),
+      );
+      li.appendChild(archive);
     }
 
     return li;
   }
 
-  decideMeeting({ approve = [], dismiss = [] }) {
-    this.handlers.onMeetingDecide?.({ approve, dismiss });
+  decideMeeting({ approve = [], reject = [], dismiss = [] }) {
+    this.handlers.onMeetingDecide?.({ approve, reject, dismiss });
   }
 
   resetMeeting() {

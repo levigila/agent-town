@@ -20,6 +20,7 @@ import { browseDirectory, projectContext } from './src/project.mjs';
 import { loadOpenCodeAgents } from './src/opencode.mjs';
 import { runMeeting, composeTask, contextToText } from './src/brainstorm.mjs';
 import { createProvidersForRoles } from './src/providers/index.mjs';
+import { loadProposals, saveProposals, setProposalStatus } from './src/meeting-store.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -53,6 +54,12 @@ const history = [];
 const clients = new Set();
 
 function broadcast(ev) {
+  if (ev.type === 'diff_ready' && implementationProposalIds.length) {
+    changeProposalStatuses(implementationProposalIds, 'validating');
+  } else if (ev.type === 'run_finished' && implementationProposalIds.length) {
+    changeProposalStatuses(implementationProposalIds, ev.reason === 'completed' ? 'validating' : 'approved');
+    implementationProposalIds = [];
+  }
   history.push(ev);
   if (history.length > HISTORY_LIMIT) history.shift();
   const line = `data: ${JSON.stringify(ev)}\n\n`;
@@ -109,8 +116,37 @@ const meeting = {
   error: null,
 };
 
+const proposalStore = path.join(ROOT, '.agent-town', 'proposals.json');
+meeting.proposals = await loadProposals(proposalStore);
+
 let meetingProviders = null;
 let meetingAbort = null;
+let meetingRun = 0;
+let proposalIdSeq = 0;
+let implementationProposalIds = [];
+let persistence = Promise.resolve();
+
+function persistMeeting() {
+  persistence = persistence.catch(() => {}).then(() => saveProposals(proposalStore, meeting.proposals));
+  return persistence;
+}
+
+function changeProposalStatuses(ids, status) {
+  const selected = new Set(ids);
+  let changed = false;
+  meeting.proposals = meeting.proposals.map((proposal) => {
+    if (!selected.has(proposal.id) || proposal.status === status) return proposal;
+    changed = true;
+    return setProposalStatus(proposal, status);
+  });
+  if (changed) {
+    persistMeeting().catch((err) => {
+      meeting.error = `nao foi possivel salvar propostas: ${err.message}`;
+      console.error('[agent-town] falha ao salvar propostas', err);
+    });
+    broadcast({ type: 'meeting_updated', agentId: null, ts: Date.now(), meeting: publicMeeting() });
+  }
+}
 
 /** Providers da reuniao (criados uma vez; nunca rodam junto com uma execucao). */
 function getMeetingProviders() {
@@ -146,7 +182,6 @@ function startMeeting({ task = '' } = {}) {
 
   meeting.busy = true;
   meeting.active = true;
-  meeting.proposals = [];
   meeting.errors = [];
   meeting.usage = { in: 0, out: 0 };
   meeting.startedAt = Date.now();
@@ -154,6 +189,8 @@ function startMeeting({ task = '' } = {}) {
   meeting.error = null;
 
   meetingAbort = new AbortController();
+  const run = ++meetingRun;
+  const signal = meetingAbort.signal;
 
   broadcast({ type: 'meeting_started', agentId: null, ts: Date.now(), agents: config.agents || [] });
 
@@ -168,31 +205,66 @@ function startMeeting({ task = '' } = {}) {
             .split('\n')
             .map((l) => l.trim())
             .filter((l) => l && !l.endsWith('/'));
+      const previousIdeas = meeting.proposals
+        .slice(-20)
+        .map((proposal) => `- [${proposal.status}] ${proposal.title}: ${String(proposal.benefits || proposal.why || '').slice(0, 180)}`)
+        .join('\n');
 
       const result = await runMeeting({
         agents: config.agents || [],
         byInstance,
         byRole,
-        context: [task ? `Pedido do usuario: ${task}` : '', treeText].filter(Boolean).join('\n\n'),
+        context: [
+          task ? `Pedido do usuario: ${task}` : '',
+          treeText,
+          previousIdeas ? `Melhorias ja registradas — nao as proponha novamente:\n${previousIdeas}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
         fileTree: treeText,
         knownFiles,
-        signal: meetingAbort.signal,
+        signal,
         emit: (type, agentId, payload) =>
           broadcast({ type, agentId, ts: Date.now(), ...(payload || {}) }),
       });
 
-      meeting.proposals = result.proposals.map((p) => ({ ...p, status: 'pending' }));
+      if (run !== meetingRun || signal.aborted) return;
+      const createdAt = Date.now();
+      meeting.proposals.push(
+        ...result.proposals.map((p) => {
+          const id = `${p.id}_${createdAt.toString(36)}_${(++proposalIdSeq).toString(36)}`;
+          return {
+            ...p,
+            id,
+            benefits: p.benefits || p.why,
+            risks: p.risks || '',
+            complexity: p.effort,
+            impact: p.impact || 'medio',
+            dependencies: Array.isArray(p.dependencies) ? p.dependencies : [],
+            feedback: Array.isArray(p.feedback) ? p.feedback : [],
+            votes: Array.isArray(p.votes) ? p.votes : [],
+            createdAt,
+            status: 'proposal',
+            statusHistory: [{ status: 'proposal', at: createdAt }],
+          };
+        }),
+      );
       meeting.errors = result.errors;
       meeting.usage = result.usage;
       meeting.error = result.proposals.length ? null : 'nenhum agente devolveu proposta valida';
+      await persistMeeting();
+      broadcast({ type: 'meeting_updated', agentId: null, ts: Date.now(), meeting: publicMeeting() });
     } catch (err) {
+      if (run !== meetingRun) return;
       meeting.error = err.message;
       broadcast({ type: 'agent_error', agentId: null, ts: Date.now(), text: `reuniao: ${err.message}` });
     } finally {
-      meeting.busy = false;
-      meeting.finishedAt = Date.now();
-      meetingAbort = null;
-      broadcast({ type: 'meeting_done', agentId: null, ts: Date.now(), meeting: publicMeeting() });
+      if (run === meetingRun) {
+        meeting.busy = false;
+        meeting.finishedAt = Date.now();
+        meetingAbort = null;
+        broadcast({ type: 'meeting_done', agentId: null, ts: Date.now(), meeting: publicMeeting() });
+      }
     }
   })();
 
@@ -200,44 +272,61 @@ function startMeeting({ task = '' } = {}) {
 }
 
 function stopMeeting() {
+  meetingRun++;
   meetingAbort?.abort();
   meetingAbort = null;
   meeting.active = false;
   meeting.busy = false;
-  meeting.proposals = [];
-  meeting.errors = [];
-  meeting.error = null;
-  meeting.startedAt = null;
-  meeting.finishedAt = null;
+  meeting.finishedAt = Date.now();
   broadcast({ type: 'meeting_done', agentId: null, ts: Date.now(), meeting: publicMeeting() });
   return { ok: true, meeting: publicMeeting() };
 }
 
 /**
- * Aprova e/ou descarta propostas.
- * Aprovadas viram uma execucao real (modo projeto, na propria pasta do servidor).
+ * Registra a decisao final do usuario sem iniciar a implementacao.
  */
-function decideMeeting({ approve = [], dismiss = [] } = {}) {
-  const approveIds = new Set(Array.isArray(approve) ? approve : []);
-  const dismissIds = new Set(Array.isArray(dismiss) ? dismiss : []);
+function decideMeeting({ approve = [], reject = [], dismiss = [] } = {}) {
+  const rejectIds = new Set([...Array.isArray(reject) ? reject : [], ...Array.isArray(dismiss) ? dismiss : []]);
+  const approveIds = new Set((Array.isArray(approve) ? approve : []).filter((id) => !rejectIds.has(id)));
 
-  for (const p of meeting.proposals) {
-    if (approveIds.has(p.id)) p.status = 'approved';
-    else if (dismissIds.has(p.id)) p.status = 'dismissed';
-  }
+  const approvedNow = meeting.proposals
+    .filter((p) => approveIds.has(p.id) && p.status === 'proposal')
+    .map((p) => p.id);
+  const rejectedNow = meeting.proposals
+    .filter((p) => rejectIds.has(p.id) && ['proposal', 'analysis'].includes(p.status))
+    .map((p) => p.id);
+  changeProposalStatuses(approvedNow, 'approved');
+  changeProposalStatuses(rejectedNow, 'rejected');
+  persistMeeting().catch((err) => {
+    meeting.error = `nao foi possivel salvar propostas: ${err.message}`;
+    console.error('[agent-town] falha ao salvar propostas', err);
+  });
 
-  const approved = meeting.proposals.filter((p) => p.status === 'approved');
-  if (!approved.length) {
-    return { ok: true, meeting: publicMeeting(), started: false };
-  }
+  return { ok: true, meeting: publicMeeting(), started: false };
+}
 
+async function implementMeeting(ids = []) {
   if (runner.running) {
     return { ok: false, error: 'ja existe uma execucao rodando', meeting: publicMeeting(), started: false };
   }
+  if (meeting.busy) {
+    return { ok: false, error: 'aguarde a reuniao terminar antes de implementar', meeting: publicMeeting(), started: false };
+  }
+  if (meeting.active) {
+    return { ok: false, error: 'encerre a reuniao antes de iniciar projetos', meeting: publicMeeting(), started: false };
+  }
+  if (!Array.isArray(ids) || ids.length !== 1) {
+    return { ok: false, error: 'implemente uma proposta aprovada por projeto', meeting: publicMeeting() };
+  }
+  const approved = meeting.proposals.filter((p) => p.status === 'approved' && p.id === ids[0]);
+  if (!approved.length) return { ok: false, error: 'a proposta selecionada nao esta aprovada', meeting: publicMeeting() };
 
   const task = composeTask(approved);
+  implementationProposalIds = approved.map((p) => p.id);
+  changeProposalStatuses(implementationProposalIds, 'implementing');
+  meeting.active = false;
   const state = runner.start({ task, mode: 'project', projectPath: meeting.target, speed: 1 });
-
+  await persistMeeting();
   return { ok: true, meeting: publicMeeting(), started: true, task, run: state };
 }
 
@@ -370,8 +459,30 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/meeting/decide' && req.method === 'POST') {
       const body = await readJson(req);
-      const result = decideMeeting({ approve: body.approve, dismiss: body.dismiss });
+      const result = decideMeeting({ approve: body.approve, reject: body.reject, dismiss: body.dismiss });
+      await persistence;
       return sendJson(res, result, result.ok ? 200 : 409);
+    }
+
+    if (pathname === '/api/meeting/implement' && req.method === 'POST') {
+      const body = await readJson(req);
+      const result = await implementMeeting(body.ids);
+      return sendJson(res, result, result.ok ? 202 : 409);
+    }
+
+    if (pathname === '/api/meeting/status' && req.method === 'POST') {
+      const body = await readJson(req);
+      const proposal = meeting.proposals.find((p) => p.id === body.id);
+      if (!proposal) return sendJson(res, { error: 'proposta nao encontrada' }, 404);
+      if (!['completed', 'archived'].includes(body.status)) {
+        return sendJson(res, { error: 'status final invalido' }, 400);
+      }
+      if (body.status === 'completed' && proposal.status !== 'validating') {
+        return sendJson(res, { error: 'somente propostas em validacao podem ser concluidas' }, 409);
+      }
+      changeProposalStatuses([proposal.id], body.status);
+      await persistence;
+      return sendJson(res, { ok: true, meeting: publicMeeting() });
     }
 
     if (pathname === '/api/run' && req.method === 'POST') {

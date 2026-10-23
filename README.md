@@ -309,6 +309,27 @@ ferramentas internas.
 
 ---
 
+## Reuniões de melhoria
+
+No modo real, clique na mesa de reunião para iniciar uma rodada. Os agentes
+propõem melhorias uma de cada vez e recebem as propostas anteriores como
+contexto para evitar repetição. Em seguida, cada agente registra uma crítica,
+uma sugestão e um voto (`approve`, `adjust` ou `reject`) para cada proposta.
+Essa rodada é uma análise interna; a decisão final continua sendo do usuário.
+
+Os cards ficam salvos em `.agent-town/proposals.json` e permanecem disponíveis
+depois de fechar a reunião ou reiniciar o servidor. As propostas anteriores
+também são incluídas no contexto das reuniões futuras para reduzir repetição.
+Aprovar e rejeitar apenas alteram o status; cada proposta aprovada pode ser
+implementada separadamente como um projeto. Ao terminar a execução, o card fica
+em validação e o usuário pode marcá-lo como concluído. Propostas rejeitadas e
+arquivadas continuam no histórico.
+
+Status internos: `proposal`, `analysis`, `approved`, `rejected`,
+`implementing`, `validating`, `completed` e `archived`.
+
+---
+
 ## 4. Variáveis do `.env`
 
 | variável | padrão | para que serve |

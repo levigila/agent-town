@@ -15,9 +15,14 @@ import {
   contextToText,
   filterKnownFiles,
   PROPOSAL_KINDS,
+  PROPOSAL_VOTES,
   KIND_LABEL,
 } from '../src/brainstorm.mjs';
 import { Semaphore } from '../src/limiter.mjs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { loadProposals, saveProposals, setProposalStatus } from '../src/meeting-store.mjs';
 
 const problems = [];
 const expect = (cond, msg) => {
@@ -71,6 +76,7 @@ const expect = (cond, msg) => {
   for (const k of PROPOSAL_KINDS) {
     expect(KIND_LABEL[k], `KIND_LABEL faltando para ${k}`);
   }
+  expect(PROPOSAL_VOTES.join(',') === 'approve,adjust,reject', 'votos devem ter os tres resultados definidos');
 }
 
 // ===========================================================================
@@ -157,6 +163,7 @@ const MODEL = { providerKey: 'fake', model: 'm', ref: 'fake:m' };
 
 function fakeProviders(scripts) {
   const limiter = new Semaphore(4, 'Fake');
+  const requests = {};
   const make = (id) => ({
     key: 'fake',
     label: 'F',
@@ -164,7 +171,26 @@ function fakeProviders(scripts) {
     providerKey: 'fake',
     role: id,
     limiter,
-    async chat() {
+    async chat({ messages = [] }) {
+      (requests[id] ||= []).push(messages);
+      const prompt = messages.at(-1)?.content || '';
+      if (prompt.includes('ETAPA: DEBATE E VOTAÇÃO')) {
+        const proposals = JSON.parse(prompt.slice(prompt.indexOf('\n') + 1));
+        return {
+          text: JSON.stringify({
+            feedback: proposals.map((proposal) => ({
+              proposalId: proposal.id,
+              critique: 'validar o caso extremo',
+              suggestion: 'adicionar um teste funcional',
+              vote: 'adjust',
+              comment: 'boa direcao, precisa validar',
+            })),
+          }),
+          toolCalls: [],
+          finishReason: 'stop',
+          usage: { in: 10, out: 5 },
+        };
+      }
       const script = scripts[id];
       if (typeof script === 'function') return script();
       if (script instanceof Error) throw script;
@@ -174,7 +200,7 @@ function fakeProviders(scripts) {
 
   const byInstance = {};
   for (const id of Object.keys(scripts)) byInstance[id] = make(id);
-  return { byInstance, byRole: {}, limiters: { fake: limiter } };
+  return { byInstance, byRole: {}, limiters: { fake: limiter }, requests };
 }
 
 const proposalJson = (title, kind = 'visual') =>
@@ -207,6 +233,8 @@ const proposalJson = (title, kind = 'visual') =>
   expect(events.some((e) => e.type === 'meeting_started'), 'deveria emitir meeting_started');
   expect(events.some((e) => e.type === 'meeting_done'), 'deveria emitir meeting_done');
   expect(events.filter((e) => e.type === 'proposal').length === 3, 'deveria emitir um proposal por agente');
+  expect(res.proposals.every((p) => p.votes.length === agents.length), 'cada agente deveria votar em cada proposta');
+  expect(res.proposals.every((p) => p.feedback.length === agents.length), 'cada proposta deveria guardar as criticas');
 
   // ordenado do mais barato para o mais caro
   expect(res.proposals[0].effort === 'pequeno', 'o primeiro deveria ser o de menor esforco');
@@ -241,13 +269,17 @@ const proposalJson = (title, kind = 'visual') =>
     { id: 'coder-1', name: 'Caio', role: 'coder' },
     { id: 'coder-2', name: 'Clara', role: 'coder' },
   ];
-  const { byInstance } = fakeProviders({
+  const { byInstance, requests } = fakeProviders({
     'coder-1': proposalJson('Adicionar relogio na parede'),
-    'coder-2': proposalJson('adicionar   RELOGIO na parede'),
+    'coder-2': proposalJson('Adicionar relógio para a parede'),
   });
 
   const res = await runMeeting({ agents, byInstance, context: 'ctx' });
   expect(res.proposals.length === 1, `deveria deduplicar: ${res.proposals.map((p) => p.title).join(' | ')}`);
+  expect(
+    requests['coder-2'][0].at(-1).content.includes('Adicionar relogio na parede'),
+    'o segundo agente deveria analisar a proposta existente antes de sugerir',
+  );
 }
 
 // 3d. JSON embrulhado em markdown e aceito
@@ -286,7 +318,23 @@ const proposalJson = (title, kind = 'visual') =>
       providerKey: 'fake',
       role: 'coder-1',
       limiter,
-      async chat({ maxTokens }) {
+      async chat({ maxTokens, messages = [] }) {
+        if (messages.at(-1)?.content?.includes('ETAPA: DEBATE E VOTAÇÃO')) {
+          return {
+            text: JSON.stringify({
+              feedback: [{
+                proposalId: 'p_coder-1',
+                critique: 'risco',
+                suggestion: 'teste',
+                vote: 'adjust',
+                comment: 'ajustar',
+              }],
+            }),
+            toolCalls: [],
+            finishReason: 'stop',
+            usage: { in: 10, out: 5 },
+          };
+        }
         chamadas += 1;
         // primeira chamada: cortada. segunda: completa.
         if (chamadas === 1) {
@@ -376,6 +424,27 @@ const proposalJson = (title, kind = 'visual') =>
 
   expect(composeTask([]) === '', 'sem proposta a tarefa e vazia');
   expect(composeTask(null) === '', 'null deveria virar string vazia');
+}
+
+// ===========================================================================
+// 5. persistencia e historico de status
+// ===========================================================================
+{
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'agent-town-meeting-'));
+  const file = path.join(dir, 'proposals.json');
+  try {
+    expect((await loadProposals(file)).length === 0, 'arquivo ausente deveria iniciar sem propostas');
+    const proposal = setProposalStatus({ id: 'p1', title: 'Teste', statusHistory: [] }, 'proposal', 10);
+    const approved = setProposalStatus(proposal, 'approved', 20);
+    await saveProposals(file, [approved]);
+    const loaded = await loadProposals(file);
+    expect(loaded[0]?.status === 'approved', 'status deveria persistir');
+    expect(loaded[0]?.statusHistory.length === 2, 'historico deveria preservar transicoes');
+    expect(loaded[0]?.statusHistory[1]?.at === 20, 'historico deveria registrar data da decisao');
+    expect(setProposalStatus({ id: 'legacy', status: 'pending' }, 'proposal').status === 'proposal', 'status legado deveria ser migrado');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 // ===========================================================================

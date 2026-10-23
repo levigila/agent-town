@@ -1027,6 +1027,24 @@ button:focus-visible {
   background: #0f1a13;
 }
 
+.proposal[data-status='rejected'],
+.proposal[data-status='archived'] {
+  opacity: 0.65;
+}
+
+.proposal[data-status='implementing'] {
+  border-left-color: #d1a552;
+}
+
+.proposal[data-status='validating'] {
+  border-left-color: #67a9e8;
+}
+
+.proposal[data-status='completed'] {
+  border-left-color: #4caf50;
+  opacity: 0.78;
+}
+
 .proposal.is-busy {
   color: var(--muted-2);
   font-size: 11px;
@@ -1091,6 +1109,18 @@ button:focus-visible {
   font-weight: 600;
 }
 
+.proposal-id,
+.proposal-date {
+  color: #6b7590;
+  font-size: 9px;
+}
+
+.proposal-status {
+  color: #8f9bb0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .proposal-text {
   margin: 0;
   font-size: 11px;
@@ -1100,6 +1130,10 @@ button:focus-visible {
 
 .proposal-text.is-how {
   color: #8d97a9;
+}
+
+.proposal-text.is-risk {
+  color: #e6a184;
 }
 
 .proposal-files {
