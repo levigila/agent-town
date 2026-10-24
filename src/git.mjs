@@ -1,7 +1,7 @@
 // Operações git para trabalhar num projeto REAL com segurança.
 //
 // Regras invioláveis deste módulo:
-//   1. Nunca `git push`. Em nenhuma circunstância.
+//   1. Nunca `git push` durante a execucao. Publicacao explicita: repository.mjs.
 //   2. Nunca commitar na branch em que o usuário estava.
 //   3. Nunca começar com alterações pendentes em arquivos rastreados
 //      (senão não dá para separar o que o agente fez do que já estava lá).
@@ -243,8 +243,10 @@ export async function commitFiles(root, files, message, tmpDir) {
   if (!list.length) return { ok: false, output: 'nada para commitar' };
 
   await git(root, ['add', '--', ...list], { tmpDir });
-  const res = await git(root, ['commit', '-m', message, '--no-verify', '--', ...list], { tmpDir });
-  return { ok: res.code === 0, output: res.output };
+  const trailer = 'Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>';
+  const res = await git(root, ['commit', '-m', `${message}\n\n${trailer}`, '--no-verify', '--', ...list], { tmpDir });
+  const head = res.code === 0 ? await git(root, ['rev-parse', 'HEAD'], { tmpDir }) : null;
+  return { ok: res.code === 0, output: res.output, commit: head?.code === 0 ? head.output : null };
 }
 
 /**

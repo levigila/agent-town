@@ -717,11 +717,13 @@ export class Orchestrator {
         diff: diff.text,
         truncated: diff.truncated,
         committed: commit.ok,
+        commit: commit.commit,
       });
 
       if (this.project) {
         this.project.changed = files.length;
         this.project.committed = commit.ok;
+        this.project.commit = commit.commit;
       }
     } catch (err) {
       this._emit('agent_error', null, { text: `falha ao gerar diff: ${err.message}` });

@@ -10,3 +10,4 @@ runs/
 preview.png
 node_modules/
 *.log
+.agent-town/

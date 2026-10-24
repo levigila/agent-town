@@ -93,6 +93,8 @@ export class UI {
     this.diffPanel = document.getElementById('diffPanel');
     this.diffBody = document.getElementById('diffBody');
     this.diffMeta = document.getElementById('diffMeta');
+    this.btnPublish = document.getElementById('btnPublish');
+    this.repositoryStatus = document.getElementById('repositoryStatus');
 
     // card da reuniao (propostas de melhoria)
     this.meetingPanel = document.getElementById('meetingPanel');
@@ -128,6 +130,7 @@ export class UI {
   }
 
   wire() {
+    this.btnPublish.addEventListener('click', () => this.handlers.onPublish?.());
     this.btnRun.addEventListener('click', () => this.handlers.onRun(this.getRequest()));
     this.btnStop.addEventListener('click', () => this.handlers.onStop());
     this.speedEl.addEventListener('change', () => this.handlers.onSpeed(Number(this.speedEl.value)));
@@ -467,6 +470,7 @@ export class UI {
   // -- diff -----------------------------------------------------------------
 
   renderDiff(ev) {
+    this.btnPublish.disabled = !ev.committed || !ev.commit;
     this.diffPanel.hidden = false;
     const files = ev.files || [];
     const count = files.length;
@@ -499,6 +503,7 @@ export class UI {
   }
 
   resetDiff() {
+    this.btnPublish.disabled = true;
     this.diffPanel.hidden = true;
     this.diffBody.innerHTML = '';
     this.diffMeta.textContent = '';
@@ -571,7 +576,8 @@ export class UI {
     const count = this.meetingSelection.size;
     if (this.btnMeetingApprove) {
       this.btnMeetingApprove.disabled = count === 0 || busy;
-      this.btnMeetingApprove.textContent = count > 0 ? `aprovar ${count}` : 'aprovar';
+      this.btnMeetingApprove.textContent =
+        count > 0 ? `aprovar e implementar ${count}` : 'aprovar e implementar';
     }
     if (this.btnMeetingReject) this.btnMeetingReject.disabled = count === 0 || busy;
     if (this.meetingFoot) this.meetingFoot.hidden = false;

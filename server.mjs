@@ -20,6 +20,8 @@ import { browseDirectory, projectContext } from './src/project.mjs';
 import { loadOpenCodeAgents } from './src/opencode.mjs';
 import { runMeeting, composeTask, contextToText } from './src/brainstorm.mjs';
 import { createProvidersForRoles } from './src/providers/index.mjs';
+import { publishRepository, syncRepository } from './src/repository.mjs';
+import { resolveProjectPath } from './src/project.mjs';
 import { loadProposals, saveProposals, setProposalStatus } from './src/meeting-store.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -52,6 +54,7 @@ const MIME = new Map(
 const HISTORY_LIMIT = 500;
 const history = [];
 const clients = new Set();
+let repositoryBusy = false;
 
 function broadcast(ev) {
   if (ev.type === 'diff_ready' && implementationProposalIds.length) {
@@ -174,6 +177,7 @@ function publicMeeting() {
  * requisicao HTTP nao precisa esperar os modelos responderem.
  */
 function startMeeting({ task = '' } = {}) {
+  if (repositoryBusy) return { ok: false, error: 'sincronizacao Git em andamento' };
   if (meeting.busy) return { ok: false, error: 'a reuniao ja esta acontecendo' };
   if (runner.running) return { ok: false, error: 'pare a execucao antes de abrir a reuniao' };
   if (modeInfo.mode !== 'real') {
@@ -283,9 +287,16 @@ function stopMeeting() {
 }
 
 /**
- * Registra a decisao final do usuario sem iniciar a implementacao.
+ * Registra a decisao final e inicia a execucao assim que houver aprovacao.
  */
-function decideMeeting({ approve = [], reject = [], dismiss = [] } = {}) {
+async function decideMeeting({ approve = [], reject = [], dismiss = [] } = {}) {
+  if (runner.running) {
+    return { ok: false, error: 'ja existe uma execucao rodando', meeting: publicMeeting(), started: false };
+  }
+  if (meeting.busy) {
+    return { ok: false, error: 'aguarde a reuniao terminar antes de decidir', meeting: publicMeeting(), started: false };
+  }
+
   const rejectIds = new Set([...Array.isArray(reject) ? reject : [], ...Array.isArray(dismiss) ? dismiss : []]);
   const approveIds = new Set((Array.isArray(approve) ? approve : []).filter((id) => !rejectIds.has(id)));
 
@@ -297,15 +308,24 @@ function decideMeeting({ approve = [], reject = [], dismiss = [] } = {}) {
     .map((p) => p.id);
   changeProposalStatuses(approvedNow, 'approved');
   changeProposalStatuses(rejectedNow, 'rejected');
-  persistMeeting().catch((err) => {
+  if (approvedNow.length) {
+    meeting.active = false;
+    broadcast({ type: 'meeting_done', agentId: null, ts: Date.now(), meeting: publicMeeting() });
+    return implementMeeting(approvedNow);
+  }
+
+  try {
+    await persistMeeting();
+  } catch (err) {
     meeting.error = `nao foi possivel salvar propostas: ${err.message}`;
     console.error('[agent-town] falha ao salvar propostas', err);
-  });
-
+    return { ok: false, error: meeting.error, meeting: publicMeeting(), started: false };
+  }
   return { ok: true, meeting: publicMeeting(), started: false };
 }
 
 async function implementMeeting(ids = []) {
+  if (repositoryBusy) return { ok: false, error: 'sincronizacao Git em andamento', meeting: publicMeeting() };
   if (runner.running) {
     return { ok: false, error: 'ja existe uma execucao rodando', meeting: publicMeeting(), started: false };
   }
@@ -315,18 +335,28 @@ async function implementMeeting(ids = []) {
   if (meeting.active) {
     return { ok: false, error: 'encerre a reuniao antes de iniciar projetos', meeting: publicMeeting(), started: false };
   }
-  if (!Array.isArray(ids) || ids.length !== 1) {
-    return { ok: false, error: 'implemente uma proposta aprovada por projeto', meeting: publicMeeting() };
+  if (!Array.isArray(ids) || !ids.length) {
+    return { ok: false, error: 'selecione ao menos uma proposta aprovada', meeting: publicMeeting() };
   }
-  const approved = meeting.proposals.filter((p) => p.status === 'approved' && p.id === ids[0]);
-  if (!approved.length) return { ok: false, error: 'a proposta selecionada nao esta aprovada', meeting: publicMeeting() };
+  const selected = new Set(ids);
+  const approved = meeting.proposals.filter((p) => p.status === 'approved' && selected.has(p.id));
+  if (!approved.length || approved.length !== selected.size) {
+    return { ok: false, error: 'todas as propostas selecionadas precisam estar aprovadas', meeting: publicMeeting() };
+  }
 
   const task = composeTask(approved);
   implementationProposalIds = approved.map((p) => p.id);
   changeProposalStatuses(implementationProposalIds, 'implementing');
   meeting.active = false;
+  try {
+    await persistMeeting();
+  } catch (err) {
+    changeProposalStatuses(implementationProposalIds, 'approved');
+    implementationProposalIds = [];
+    meeting.error = `nao foi possivel salvar propostas: ${err.message}`;
+    return { ok: false, error: meeting.error, meeting: publicMeeting(), started: false };
+  }
   const state = runner.start({ task, mode: 'project', projectPath: meeting.target, speed: 1 });
-  await persistMeeting();
   return { ok: true, meeting: publicMeeting(), started: true, task, run: state };
 }
 
@@ -432,6 +462,41 @@ const server = http.createServer(async (req, res) => {
   try {
     if (pathname === '/events') return handleEvents(req, res);
 
+    if (['/api/repository/sync', '/api/repository/publish'].includes(pathname) && req.method === 'POST') {
+      if (!config.allowAnyPath) return sendJson(res, { error: 'operacoes Git disponiveis apenas no servidor local' }, 403);
+      if (req.headers.origin && req.headers.origin !== url.origin) {
+        return sendJson(res, { error: 'origem da requisicao nao autorizada' }, 403);
+      }
+      if (!req.headers['content-type']?.startsWith('application/json')) {
+        return sendJson(res, { error: 'Content-Type application/json obrigatorio' }, 415);
+      }
+      if (repositoryBusy || runner.running || meeting.busy || meeting.active) {
+        return sendJson(res, { error: 'aguarde o fim da execucao/reuniao ou da operacao Git atual' }, 409);
+      }
+      repositoryBusy = true;
+      try {
+        const body = await readJson(req);
+        const project = runner.getState().project;
+        if (pathname.endsWith('/publish')) {
+          if (!project?.committed || !project.commit) {
+            return sendJson(res, { error: 'nenhuma execucao com commit disponivel para publicar' }, 409);
+          }
+          const result = await publishRepository(project.path, project.branch, project.commit);
+          return sendJson(res, result);
+        }
+        const resolved = resolveProjectPath(body.projectPath || project?.path || ROOT, config.projectRoots, {
+          allowAny: config.allowAnyPath,
+        });
+        if (!resolved.ok) return sendJson(res, { error: resolved.error }, 400);
+        return sendJson(res, await syncRepository(resolved.path));
+      } catch (err) {
+        console.error('[agent-town] operacao Git bloqueada/falhou:', err.message);
+        return sendJson(res, { error: err.message }, 409);
+      } finally {
+        repositoryBusy = false;
+      }
+    }
+
     if (pathname === '/api/state') {
       return sendJson(res, {
         ...runner.getState(),
@@ -487,6 +552,7 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/run' && req.method === 'POST') {
       const body = await readJson(req);
+      if (repositoryBusy) return sendJson(res, { error: 'sincronizacao Git em andamento' }, 409);
       if (runner.running) return sendJson(res, { ...runner.getState(), mode: modeInfo.mode }, 409);
       if (meeting.busy) {
         return sendJson(

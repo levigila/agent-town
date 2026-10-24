@@ -176,6 +176,17 @@ try {
   };
 
   const ui = new UI(handlers);
+  ui.renderDiff({ files: [], branch: 'agent-town/run_test', committed: true, commit: 'a'.repeat(40) });
+  expect(ui.btnPublish.disabled === false, 'commit dos agentes deve habilitar publicacao');
+  let publishClicks = 0;
+  handlers.onPublish = () => { publishClicks++; };
+  ui.btnPublish.dispatch('click');
+  expect(publishClicks === 1, 'um clique deve solicitar a publicacao');
+  ui.resetDiff();
+  expect(ui.btnPublish.disabled === true, 'nova execucao deve limpar a publicacao anterior');
+  ui.renderDiff({ files: [], branch: 'agent-town/run_test', committed: false });
+  expect(ui.btnPublish.disabled === true, 'falha no commit nao deve permitir publicar');
+  ui.resetDiff();
 
   // métodos que o main.js chama — todos precisam existir.
   const required = [
@@ -342,8 +353,8 @@ try {
     ui.renderMeeting();
     expect(ui.btnMeetingApprove.disabled === false, 'com selecao, o botao deveria habilitar');
     expect(
-      ui.btnMeetingApprove.textContent.includes('1'),
-      `o botao deveria dizer quantas: ${ui.btnMeetingApprove.textContent}`,
+      ui.btnMeetingApprove.textContent.includes('aprovar e implementar 1'),
+      `o botao deveria avisar que aprova e inicia a implementacao: ${ui.btnMeetingApprove.textContent}`,
     );
 
     // decideMeeting repassa a selecao para o handler

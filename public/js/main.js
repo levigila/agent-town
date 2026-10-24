@@ -16,15 +16,44 @@ const speedEl = document.getElementById('speed');
 const renderer = new Renderer({ stage, world: worldCanvas, overlay: overlayCanvas, agents });
 
 const ui = new UI({
-  onRun: (request) => post('/api/run', request),
+  onRun: (request) => {
+    localStorage.setItem('agent-town:sync-project', request.mode === 'project' ? request.projectPath : '');
+    return post('/api/run', request);
+  },
   onStop: () => post('/api/stop', {}),
   onSpeed: (speed) => post('/api/speed', { speed }),
   onSelect: (id) => selectAgent(id),
-  onMeetingDecide: (payload) => post('/api/meeting/decide', payload),
+  onMeetingDecide: (payload) => {
+    localStorage.removeItem('agent-town:sync-project');
+    return post('/api/meeting/decide', payload);
+  },
   onMeetingStop: () => post('/api/meeting/stop', {}),
-  onMeetingImplement: (ids) => post('/api/meeting/implement', { ids }),
+  onMeetingImplement: (ids) => {
+    localStorage.removeItem('agent-town:sync-project');
+    return post('/api/meeting/implement', { ids });
+  },
   onMeetingStatus: (payload) => post('/api/meeting/status', payload),
+  onPublish: () => publishChanges(),
 });
+
+async function publishChanges() {
+  ui.btnPublish.disabled = true;
+  ui.repositoryStatus.textContent = 'Publicando a execucao na branch principal...';
+  try {
+    const response = await fetch('/api/repository/publish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    ui.repositoryStatus.textContent = `Publicado no GitHub: ${result.branch} (${result.commit.slice(0, 8)}).`;
+  } catch (err) {
+    ui.repositoryStatus.textContent = `Publicacao bloqueada/falhou: ${err.message}`;
+    ui.btnPublish.disabled = false;
+    console.error('[agent-town] publicacao:', err);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Hover (tooltip do agente)

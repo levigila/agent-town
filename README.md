@@ -163,7 +163,8 @@ O que o modo projeto garante:
    rastreados, como `.vscode/`, são tolerados e ficam fora do commit.
 4. **Diff obrigatório.** Ao final, você vê exatamente o que mudou, arquivo por
    arquivo, com `+` e `-`.
-5. **Commit na branch, nunca push.** Não existe `git push` em nenhum lugar do código.
+5. **Commit na branch, sem push automatico.** Publicar na principal exige clicar
+   em **Publicar na principal do GitHub** no painel de alteracoes.
 6. **Testes plugáveis.** O projeto define seu próprio comando em `.agent-town.json`.
 
 > **Onde fica o código que os agentes escreveram?** Na branch `agent-town/<runId>`.
@@ -320,13 +321,41 @@ Essa rodada é uma análise interna; a decisão final continua sendo do usuário
 Os cards ficam salvos em `.agent-town/proposals.json` e permanecem disponíveis
 depois de fechar a reunião ou reiniciar o servidor. As propostas anteriores
 também são incluídas no contexto das reuniões futuras para reduzir repetição.
-Aprovar e rejeitar apenas alteram o status; cada proposta aprovada pode ser
-implementada separadamente como um projeto. Ao terminar a execução, o card fica
-em validação e o usuário pode marcá-lo como concluído. Propostas rejeitadas e
-arquivadas continuam no histórico.
+Ao aprovar uma ou mais propostas, a reunião é encerrada, os agentes voltam às
+bancadas e a implementação começa imediatamente como um projeto. Rejeitar
+apenas altera o status. Ao terminar a execução, os cards ficam em validação e
+o usuário pode marcá-los como concluídos. Propostas rejeitadas e arquivadas
+continuam no histórico.
 
 Status internos: `proposal`, `analysis`, `approved`, `rejected`,
 `implementing`, `validating`, `completed` e `archived`.
+
+### Publicar no GitHub e atualizar o projeto
+
+O projeto real deve ter `origin` apontando para GitHub e autenticacao Git
+configurada no computador (Git Credential Manager/SSH). Nao coloque tokens no
+URL do remote nem no navegador. A branch principal e descoberta por `origin/HEAD`.
+
+Ao terminar uma execucao com commit, clique em **Publicar na principal do GitHub**
+no painel **Alteracoes**. O botao integra o commit ja criado pelos agentes na
+principal e faz push, sem force-push e sem adicionar outros arquivos. O GitHub
+pode recusar a publicacao por permissao ou protecao de branch; o erro aparece na
+tela. Se o push falhar, o commit permanece local e o botao permite tentar novamente.
+
+Recarregar a pagina sincroniza automaticamente a principal do ultimo projeto
+executado nesta janela (ou o proprio agent-town, antes de escolher um projeto).
+Alteracoes locais, arquivos nao rastreados, reuniao/execucao em andamento e
+historicos divergentes bloqueiam a operacao com uma mensagem visivel.
+Nao ha stash, reset, merge com conflitos nem force-push automaticos.
+
+Para recarregar tambem o servidor Node quando o codigo dele mudar, inicie o
+agent-town com `npm run dev` (watch), em vez de `npm start`. A pagina recarrega
+apos uma sincronizacao com novidades; se o watch reiniciar o servidor durante
+a requisicao, recarregue novamente quando ele estiver disponivel. Atualizacoes
+de dependencias/configuracao e outros projetos com servidores proprios podem
+exigir instalacao ou reinicio manual: o agent-town nao reinicia processos externos.
+Execucoes e seu commit disponivel para publicacao sao mantidos na sessao do
+servidor; apos reiniciar, a branch Git continua existindo para publicacao manual.
 
 ---
 
@@ -441,7 +470,7 @@ rastreado, e não herdar a branch de uma execução anterior.
                                    │  src/git.mjs isola
                                    ▼
                     ┌─────────────────────────────────────┐
-                    │  branch + diff + commit (nunca push)│
+                    │  branch + diff + commit local      │
                     └─────────────────────────────────────┘
 ```
 
@@ -450,7 +479,8 @@ src/
 ├─ orchestrator.mjs   planeja, executa ondas, finaliza com diff
 ├─ planner.mjs        prompt do Planner + retentativa com o erro
 ├─ graph.mjs          parsing, validação, DAG, ondas  (puro, testável)
-├─ git.mjs            branch, diff, commit — nunca push
+├─ git.mjs            branch, diff, commit local
+├─ repository.mjs     sincronizacao e publicacao explicita no GitHub
 ├─ project.mjs        allowlist de caminho + .agent-town.json
 ├─ tools.mjs          list/read/write/run_tests, presos ao workspace
 ├─ providers/         openai-compat · gemini · http com retry
