@@ -176,6 +176,23 @@ try {
   };
 
   const ui = new UI(handlers);
+  {
+    const models = [
+      { id: 'planner', role: 'planner', modelRef: { model: 'deepseek-v4.1-flash-free', ref: 'verboo:deepseek-v4.1-flash-free' } },
+      { id: 'researcher', role: 'researcher', modelRef: { model: 'glm-5.3-flash-free' } },
+      { id: 'coder', role: 'coder', modelRef: { model: 'kimi-k2.7-code' } },
+      { id: 'reviewer', role: 'reviewer', modelRef: { model: 'claude-haiku-5-5' } },
+    ];
+    ui.setAgentModels(models);
+    expect(ui.cards.get('coder-1').model.textContent === 'kimi-k2.7-code', 'card deve mostrar modelo configurado no servidor');
+    expect(ui.cards.get('coder-2').model.textContent === 'kimi-k2.7-code', 'instancias do mesmo papel devem mostrar modelo novo');
+    const { agentOf } = await import('../public/js/config.js');
+    expect(agentOf('reviewer-1').model === 'claude-haiku-5-5', 'definicao da cena deve receber modelo novo');
+    ui.setAgentModels(models.map((item) => item.role === 'coder'
+      ? { ...item, modelRef: { model: '<modelo-novo>' } }
+      : item));
+    expect(ui.cards.get('coder-1').model.textContent === '<modelo-novo>', 'troca futura deve atualizar texto sem HTML');
+  }
   ui.renderDiff({ files: [], branch: 'agent-town/run_test', committed: true, commit: 'a'.repeat(40) });
   expect(ui.btnPublish.disabled === false, 'commit dos agentes deve habilitar publicacao');
   let publishClicks = 0;

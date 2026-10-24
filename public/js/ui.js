@@ -782,9 +782,29 @@ export class UI {
       this.rosterEl.appendChild(card);
       this.cards.set(def.id, {
         root: card,
+        model: card.querySelector('.card-model'),
         state: card.querySelector('.card-state'),
         tokens: card.querySelector('.card-tokens'),
       });
+    }
+  }
+
+  setAgentModels(instances) {
+    if (!Array.isArray(instances)) throw new Error('lista de modelos dos agentes invalida');
+    for (const def of AGENT_LIST) {
+      const instance = instances.find((item) => item.id === def.id) ||
+        instances.find((item) => item.role === def.role);
+      if (!instance?.modelRef?.model) {
+        throw new Error(`modelo nao informado pelo servidor para ${def.id}`);
+      }
+      def.model = instance.modelRef.model;
+      const sceneDef = agentOf(def.id);
+      if (sceneDef) sceneDef.model = def.model;
+      const card = this.cards.get(def.id);
+      if (card) {
+        card.model.textContent = def.model;
+        card.model.title = instance.modelRef.ref || def.model;
+      }
     }
   }
 

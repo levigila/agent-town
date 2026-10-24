@@ -80,7 +80,7 @@ const ROLE_BASE = [
     role: 'planner',
     name: 'Planner',
     roleName: 'Orquestrador',
-    model: 'v4.1 flash',
+    model: 'carregando...',
     accent: '#a78bfa',
     desk: 0,
     pal: {
@@ -96,7 +96,7 @@ const ROLE_BASE = [
     role: 'researcher',
     name: 'Researcher',
     roleName: 'Pesquisa',
-    model: 'glm 5.3 flash',
+    model: 'carregando...',
     accent: '#f5a623',
     desk: 1,
     pal: {
@@ -112,7 +112,7 @@ const ROLE_BASE = [
     role: 'coder',
     name: 'Coder',
     roleName: 'Implementacao',
-    model: 'v4.1 flash',
+    model: 'carregando...',
     accent: '#4be0c8',
     desk: 2,
     pal: {
@@ -128,7 +128,7 @@ const ROLE_BASE = [
     role: 'reviewer',
     name: 'Reviewer',
     roleName: 'Revisao',
-    model: 'qwen3.8 27b',
+    model: 'carregando...',
     accent: '#4da3ff',
     desk: 3,
     pal: {

@@ -267,11 +267,16 @@ function connect() {
 
 async function loadConfig() {
   try {
-    const [projects, state] = await Promise.all([
+    const [projects, state, agentConfig] = await Promise.all([
       fetch('/api/projects').then((r) => r.json()),
       fetch('/api/state').then((r) => r.json()),
+      fetch('/api/agents').then((r) => {
+        if (!r.ok) throw new Error(`falha ao carregar modelos: HTTP ${r.status}`);
+        return r.json();
+      }),
     ]);
 
+    ui.setAgentModels(agentConfig.instances);
     ui.setMode(state.mode, { projectsEnabled: projects.enabled });
 
     const input = document.getElementById('projectInput');

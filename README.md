@@ -330,6 +330,11 @@ continuam no histórico.
 Status internos: `proposal`, `analysis`, `approved`, `rejected`,
 `implementing`, `validating`, `completed` e `archived`.
 
+Os modelos exibidos nos cards de agentes sao carregados da configuracao do
+servidor. Depois de alterar os modelos no `.env`, reinicie o servidor e
+recarregue a pagina para atualizar os rotulos. O nome exibido indica a
+configuracao, nao confirma conectividade ou disponibilidade do modelo na API.
+
 ### Publicar no GitHub e atualizar o projeto
 
 O projeto real deve ter `origin` apontando para GitHub e autenticacao Git
